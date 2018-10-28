@@ -15,6 +15,7 @@ import (
 	"github.com/coreos/bbolt"
 	"github.com/go-pkgz/mongo"
 	"github.com/pkg/errors"
+	"github.com/umputun/remark/backend/app/notify"
 
 	"github.com/umputun/remark/backend/app/migrator"
 	"github.com/umputun/remark/backend/app/rest/api"
@@ -35,6 +36,7 @@ type ServerCommand struct {
 	Cache  CacheGroup  `group:"cache" namespace:"cache" env-namespace:"CACHE"`
 	Mongo  MongoGroup  `group:"mongo" namespace:"mongo" env-namespace:"MONGO"`
 	Admin  AdminGroup  `group:"admin" namespace:"admin" env-namespace:"ADMIN"`
+	Notify NotifyGroup `group:"notify" namespace:"notify" env-namespace:"NOTIFY"`
 
 	Sites          []string      `long:"site" env:"SITE" default:"remark" description:"site names" env-delim:","`
 	DevPasswd      string        `long:"dev-passwd" env:"DEV_PASSWD" default:"" description:"development mode password"`
@@ -93,7 +95,7 @@ type AvatarGroup struct {
 
 // CacheGroup defines options group for cache params
 type CacheGroup struct {
-	Type string `long:"type" env:"TYPE" description:"type of cache" choice:"mem" choice:"mongo" choice:"nop" default:"mem"`
+	Type string `long:"type" env:"TYPE" description:"type of cache" choice:"mem" choice:"mongo" choice:"none" default:"mem"`
 	Max  struct {
 		Items int   `long:"items" env:"ITEMS" default:"1000" description:"max cached items"`
 		Value int   `long:"value" env:"VALUE" default:"65536" description:"max size of cached value"`
@@ -114,6 +116,17 @@ type AdminGroup struct {
 		Admins []string `long:"id" env:"ID" description:"admin(s) ids" env-delim:","`
 		Email  string   `long:"email" env:"EMAIL" default:"" description:"admin email"`
 	} `group:"shared" namespace:"shared" env-namespace:"SHARED"`
+}
+
+// NotifyGroup defines options for notification
+type NotifyGroup struct {
+	Type      string `long:"type" env:"TYPE" description:"type of notification" choice:"none" choice:"telegram" default:"none"`
+	QueueSize int    `long:"queue" env:"QUEUE" description:"size of notification queue" default:"100"`
+	Telegram  struct {
+		Token   string        `long:"token" env:"TOKEN" description:"telegram token"`
+		Channel string        `long:"chan" env:"CHAN" description:"telegram channel"`
+		Timeout time.Duration `long:"timeout" env:"TIMEOUT" default:"5s" description:"telegram timeout"`
+	} `group:"telegram" namespace:"telegram" env-namespace:"TELEGRAM"`
 }
 
 // serverApp holds all active objects
@@ -213,6 +226,12 @@ func (s *ServerCommand) newServerApp() (*serverApp, error) {
 		KeyStore:          adminStore,
 	}
 
+	notifyService, err := s.makeNotify(dataService)
+	if err != nil {
+		log.Printf("[WARN] failed to make notify service, %s", err)
+		notifyService = notify.NopService // disable notifier
+	}
+
 	authProviders := s.makeAuthProviders(jwtService, avatarProxy, dataService)
 	imgProxy := &proxy.Image{Enabled: s.ImageProxy, RoutePath: "/api/v1/img", RemarkURL: s.RemarkURL}
 	commentFormatter := store.NewCommentFormatter(imgProxy)
@@ -235,7 +254,8 @@ func (s *ServerCommand) newServerApp() (*serverApp, error) {
 			DevPasswd:         s.DevPasswd,
 			PermissionChecker: dataService,
 		},
-		Cache: loadingCache,
+		Cache:         loadingCache,
+		NotifyService: notifyService,
 	}
 
 	srv.ScoreThresholds.Low, srv.ScoreThresholds.Critical = s.LowScore, s.CriticalScore
@@ -395,7 +415,7 @@ func (s *ServerCommand) makeCache() (cache.LoadingCache, error) {
 		conn := mongo.NewConnection(mgServer, s.Mongo.DB, "cache")
 		return cache.NewMongoCache(conn, cache.MaxCacheSize(s.Cache.Max.Size), cache.MaxValSize(s.Cache.Max.Value),
 			cache.MaxKeys(s.Cache.Max.Items))
-	case "nop":
+	case "none":
 		return &cache.Nop{}, nil
 	}
 	return nil, errors.Errorf("unsupported cache type %s", s.Cache.Type)
@@ -442,4 +462,19 @@ func (s *ServerCommand) makeAuthProviders(jwt *auth.JWT, ap *proxy.Avatar, ds *s
 		log.Printf("[WARN] no auth providers defined")
 	}
 	return providers
+}
+
+func (s *ServerCommand) makeNotify(dataStore *service.DataStore) (*notify.Service, error) {
+	log.Printf("[INFO] make notify, type=%s", s.Notify.Type)
+	switch s.Notify.Type {
+	case "telegram":
+		tg, err := notify.NewTelegram(s.Notify.Telegram.Token, s.Notify.Telegram.Channel, s.Notify.Telegram.Timeout, "")
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to create telegram notification destination")
+		}
+		return notify.NewService(dataStore, s.Notify.QueueSize, tg), nil
+	case "none":
+		return notify.NopService, nil
+	}
+	return nil, errors.Errorf("unsupported notification type %q", s.Notify.Type)
 }
