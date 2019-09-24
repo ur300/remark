@@ -3,6 +3,7 @@ package store
 import (
 	"html/template"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/microcosm-cc/bluemonday"
@@ -10,18 +11,22 @@ import (
 
 // Comment represents a single comment with optional reference to its parent
 type Comment struct {
-	ID        string          `json:"id" bson:"_id"`
-	ParentID  string          `json:"pid"`
-	Text      string          `json:"text"`
-	Orig      string          `json:"orig,omitempty"`
-	User      User            `json:"user"`
-	Locator   Locator         `json:"locator"`
-	Score     int             `json:"score"`
-	Votes     map[string]bool `json:"votes"`
-	Timestamp time.Time       `json:"time" bson:"time"`
-	Edit      *Edit           `json:"edit,omitempty" bson:"edit,omitempty"` // pointer to have empty default in json response
-	Pin       bool            `json:"pin,omitempty" bson:"pin,omitempty"`
-	Deleted   bool            `json:"delete,omitempty" bson:"delete"`
+	ID          string                 `json:"id" bson:"_id"`
+	ParentID    string                 `json:"pid"`
+	Text        string                 `json:"text"`
+	Orig        string                 `json:"orig,omitempty"`
+	User        User                   `json:"user"`
+	Locator     Locator                `json:"locator"`
+	Score       int                    `json:"score"`
+	Votes       map[string]bool        `json:"votes,omitempty"`
+	VotedIPs    map[string]VotedIPInfo `json:"voted_ips,omitempty"` // voted ips (hashes) with TS
+	Vote        int                    `json:"vote"`                // vote for the current user, -1/1/0.
+	Controversy float64                `json:"controversy,omitempty"`
+	Timestamp   time.Time              `json:"time" bson:"time"`
+	Edit        *Edit                  `json:"edit,omitempty" bson:"edit,omitempty"` // pointer to have empty default in json response
+	Pin         bool                   `json:"pin,omitempty" bson:"pin,omitempty"`
+	Deleted     bool                   `json:"delete,omitempty" bson:"delete"`
+	PostTitle   string                 `json:"title,omitempty" bson:"title"`
 }
 
 // Locator keeps site and url of the post
@@ -52,6 +57,12 @@ type BlockedUser struct {
 	Until time.Time `json:"time"`
 }
 
+// VotedIPInfo keeps timestamp and voting value (direction). Used as VotedIPs value
+type VotedIPInfo struct {
+	Timestamp time.Time
+	Value     bool
+}
+
 // DeleteMode defines how much comment info will be erased
 type DeleteMode int
 
@@ -63,6 +74,7 @@ const (
 
 // Maximum length for URL text shortening.
 const shortURLLen = 48
+const snippetLen = 200
 
 // PrepareUntrusted pre-processes a comment received from untrusted source by clearing all
 // autogen fields and reset everything users not supposed to provide
@@ -101,6 +113,35 @@ func (c *Comment) Sanitize() {
 	c.Text = p.Sanitize(c.Text)
 	c.Orig = p.Sanitize(c.Orig)
 	c.User.ID = template.HTMLEscapeString(c.User.ID)
-	c.User.Name = template.HTMLEscapeString(c.User.Name)
+	c.User.Name = c.escapeHtmlWithSome(c.User.Name)
 	c.User.Picture = p.Sanitize(c.User.Picture)
+}
+
+// Snippet from comment's text
+func (c *Comment) Snippet(limit int) string {
+	if limit <= 0 {
+		limit = snippetLen
+	}
+	cleanText := strings.Replace(c.Text, "\n", " ", -1)
+	size := len([]rune(cleanText))
+	if size < limit {
+		return cleanText
+	}
+	snippet := []rune(cleanText)[:size]
+	// go back in snippet and found the first space
+	for i := len(snippet) - 1; i >= 0; i-- {
+		if snippet[i] == ' ' {
+			snippet = snippet[:i]
+			break
+		}
+	}
+	return string(snippet) + " ..."
+}
+
+func (c *Comment) escapeHtmlWithSome(inp string) string {
+	res := template.HTMLEscapeString(inp)
+	res = strings.Replace(res, "&#34;", "\"", -1)
+	res = strings.Replace(res, "&#39;", "'", -1)
+	res = strings.Replace(res, "&amp;", "&", -1)
+	return res
 }

@@ -3,10 +3,10 @@ package migrator
 import (
 	"encoding/xml"
 	"io"
-	"log"
 	"strings"
 	"time"
 
+	log "github.com/go-pkgz/lgr"
 	"github.com/pkg/errors"
 
 	"github.com/umputun/remark/backend/app/store"
@@ -105,7 +105,7 @@ func (d *Disqus) convert(r io.Reader, siteID string) (ch chan store.Comment) {
 				if se.Name.Local == "thread" {
 					stats.inpThreads++
 					thread := disqusThread{}
-					if err := decoder.DecodeElement(&thread, &se); err != nil {
+					if err = decoder.DecodeElement(&thread, &se); err != nil {
 						log.Printf("[WARN] can't decode disqus thread, %s", err)
 						stats.failedThreads++
 						continue
@@ -116,7 +116,7 @@ func (d *Disqus) convert(r io.Reader, siteID string) (ch chan store.Comment) {
 				if se.Name.Local == "post" {
 					stats.inpComments++
 					comment := disqusComment{}
-					if err := decoder.DecodeElement(&comment, &se); err != nil {
+					if err = decoder.DecodeElement(&comment, &se); err != nil {
 						log.Printf("[WARN] can't decode disqus comment, %s", err)
 						stats.failedPosts++
 						continue

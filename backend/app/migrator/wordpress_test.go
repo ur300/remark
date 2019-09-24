@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coreos/bbolt"
+	bolt "github.com/coreos/bbolt"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/umputun/remark/backend/app/store"
@@ -17,17 +17,17 @@ import (
 
 func TestWordPress_Import(t *testing.T) {
 	siteID := "testWP"
-	defer os.Remove("/tmp/remark-test.db")
+	defer func() { _ = os.Remove("/tmp/remark-test.db") }()
 	b, err := engine.NewBoltDB(bolt.Options{}, engine.BoltSite{FileName: "/tmp/remark-test.db", SiteID: siteID})
 	assert.Nil(t, err, "create store")
 
-	dataStore := service.DataStore{Interface: b, AdminStore: admin.NewStaticStore("12345", []string{}, "")}
+	dataStore := service.DataStore{Engine: b, AdminStore: admin.NewStaticStore("12345", nil, []string{}, "")}
 	wp := WordPress{DataStore: &dataStore}
 	size, err := wp.Import(strings.NewReader(xmlTestWP), siteID)
 	assert.Nil(t, err)
 	assert.Equal(t, 3, size)
 
-	last, err := dataStore.Last(siteID, 10)
+	last, err := dataStore.Last(siteID, 10, time.Time{}, adminUser)
 	assert.Nil(t, err)
 	assert.Equal(t, 3, len(last), "3 comments imported")
 

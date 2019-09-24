@@ -9,6 +9,8 @@ import (
 
 	"github.com/go-chi/chi"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/umputun/remark/backend/app/store"
 )
 
@@ -20,9 +22,12 @@ func TestTelegram_New(t *testing.T) {
 	tb, err := NewTelegram("good-token", "remark_test", 2*time.Second, ts.URL+"/")
 	assert.NoError(t, err)
 	assert.NotNil(t, tb)
+	assert.Equal(t, "@remark_test", tb.channelID, "@ added")
 
+	st := time.Now()
 	_, err = NewTelegram("bad-resp", "remark_test", 2*time.Second, ts.URL+"/")
 	assert.EqualError(t, err, "unexpected telegram response {OK:false Result:{FirstName:comments_test ID:707381019 IsBot:false UserName:remark42_test_bot}}")
+	assert.True(t, time.Since(st) >= 250*5*time.Millisecond)
 
 	_, err = NewTelegram("non-json-resp", "remark_test", 2*time.Second, ts.URL+"/")
 	assert.NotNil(t, err)
@@ -33,6 +38,17 @@ func TestTelegram_New(t *testing.T) {
 
 	_, err = NewTelegram("no-such-thing", "remark_test", 2*time.Second, "http://127.0.0.1:4321/")
 	assert.EqualError(t, err, "can't initialize telegram notifications: Get http://127.0.0.1:4321/no-such-thing/getMe: dial tcp 127.0.0.1:4321: connect: connection refused")
+
+	_, err = NewTelegram("good-token", "remark_test", 2*time.Second, "")
+	assert.Error(t, err, "empty api url not allowed")
+
+	_, err = NewTelegram("good-token", "remark_test", 0, ts.URL+"/")
+	assert.NoError(t, err, "0 timeout allowed as default")
+
+	tb, err = NewTelegram("good-token", "1234567890", 2*time.Second, ts.URL+"/")
+	assert.NoError(t, err)
+	assert.NotNil(t, tb)
+	assert.Equal(t, "1234567890", tb.channelID, "no @ prefix")
 }
 
 func TestTelegram_Send(t *testing.T) {
@@ -49,8 +65,17 @@ func TestTelegram_Send(t *testing.T) {
 
 	err = tb.Send(context.TODO(), request{comment: c, parent: cp})
 	assert.NoError(t, err)
+	c.PostTitle = "test title"
+	err = tb.Send(context.TODO(), request{comment: c, parent: cp})
+	assert.NoError(t, err)
 
-	assert.Equal(t, "telegram: remark_test", tb.String())
+	tb, err = NewTelegram("non-json-resp", "remark_test", 2*time.Second, ts.URL+"/")
+	assert.NotNil(t, err, "should failed")
+	err = tb.Send(context.TODO(), request{comment: c, parent: cp})
+	require.NotNil(t, err)
+	assert.Contains(t, err.Error(), "unexpected telegram status code 404", "send on broken tg")
+
+	assert.Equal(t, "telegram: @remark_test", tb.String())
 }
 
 func mockTelegramServer() *httptest.Server {

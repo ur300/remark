@@ -1,120 +1,222 @@
 package api
 
 import (
+	"bytes"
 	"compress/gzip"
-	"encoding/json"
+	"fmt"
+	"io"
 	"io/ioutil"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/coreos/bbolt"
-	"github.com/go-chi/chi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/umputun/remark/backend/app/migrator"
-	"github.com/umputun/remark/backend/app/rest/auth"
-	"github.com/umputun/remark/backend/app/rest/cache"
-	"github.com/umputun/remark/backend/app/store"
-	adminstore "github.com/umputun/remark/backend/app/store/admin"
-	"github.com/umputun/remark/backend/app/store/engine"
-	"github.com/umputun/remark/backend/app/store/service"
 )
 
 func TestMigrator_Import(t *testing.T) {
-	srv, _, ts := prepImportSrv(t)
-	assert.NotNil(t, srv)
-	defer cleanupImportSrv(srv, ts)
+	ts, _, teardown := startupT(t)
+	defer teardown()
 
-	r := strings.NewReader(`{"id":"2aa0478c-df1b-46b1-b561-03d507cf482c","pid":"","text":"<p>test test #1</p>","user":{"name":"developer one","id":"dev","picture":"/api/v1/avatar/remark.image","profile":"https://remark42.com","admin":true,"ip":"ae12fe3b5f129b5cc4cdd2b136b7b7947c4d2741"},"locator":{"site":"radio-t","url":"https://radio-t.com/blah1"},"score":0,"votes":{},"time":"2018-04-30T01:37:00.849053725-05:00"}
-	{"id":"83fd97fd-ff64-48d1-9fb7-ca7769c77037","pid":"p1","text":"<p>test test #2</p>","user":{"name":"developer one","id":"dev","picture":"/api/v1/avatar/remark.image","profile":"https://remark42.com","admin":true,"ip":"ae12fe3b5f129b5cc4cdd2b136b7b7947c4d2741"},"locator":{"site":"radio-t","url":"https://radio-t.com/blah2"},"score":0,"votes":{},"time":"2018-04-30T01:37:00.861387771-05:00"}`)
+	r := strings.NewReader(`{"version":1} {"id":"2aa0478c-df1b-46b1-b561-03d507cf482c","pid":"","text":"<p>test test #1</p>",
+"user":{"name":"developer one","id":"dev","picture":"/api/v1/avatar/remark.image","profile":"https://remark42.com",
+"admin":true,"ip":"ae12fe3b5f129b5cc4cdd2b136b7b7947c4d2741"},"locator":{"site":"remark42","url":"https://radio-t.com/blah1"},
+"score":0,"votes":{},"time":"2018-04-30T01:37:00.849053725-05:00"}
+	{"id":"83fd97fd-ff64-48d1-9fb7-ca7769c77037","pid":"p1","text":"<p>test test #2</p>","user":{"name":"developer one",
+"id":"dev","picture":"/api/v1/avatar/remark.image","profile":"https://remark42.com","admin":true,
+"ip":"ae12fe3b5f129b5cc4cdd2b136b7b7947c4d2741"},"locator":{"site":"remark42","url":"https://radio-t.com/blah2"},"score":0,
+"votes":{},"time":"2018-04-30T01:37:00.861387771-05:00"}`)
 
 	client := &http.Client{Timeout: 1 * time.Second}
-	req, err := http.NewRequest("POST", ts.URL+"/import?site=radio-t&provider=native&secret=123456", r)
+	req, err := http.NewRequest("POST", ts.URL+"/api/v1/admin/import?site=remark42&provider=native", r)
+	require.NoError(t, err)
+	req.SetBasicAuth("admin", "password")
 	assert.Nil(t, err)
 	resp, err := client.Do(req)
 	assert.Nil(t, err)
-	assert.Equal(t, http.StatusCreated, resp.StatusCode)
+	assert.Equal(t, http.StatusAccepted, resp.StatusCode)
 
 	b, err := ioutil.ReadAll(resp.Body)
 	assert.Nil(t, err)
-	assert.Equal(t, `{"size":2,"status":"ok"}`+"\n", string(b))
+	assert.Equal(t, "{\"status\":\"import request accepted\"}\n", string(b))
+
+	waitForImportCompletion(t, ts)
+}
+
+func TestMigrator_ImportForm(t *testing.T) {
+	ts, _, teardown := startupT(t)
+	defer teardown()
+
+	r := strings.NewReader(`{"version":1} {"id":"2aa0478c-df1b-46b1-b561-03d507cf482c","pid":"","text":"<p>test test #1</p>",
+"user":{"name":"developer one","id":"dev","picture":"/api/v1/avatar/remark.image","profile":"https://remark42.com",
+"admin":true,"ip":"ae12fe3b5f129b5cc4cdd2b136b7b7947c4d2741"},"locator":{"site":"remark42","url":"https://radio-t.com/blah1"},
+"score":0,"votes":{},"time":"2018-04-30T01:37:00.849053725-05:00"}
+	{"id":"83fd97fd-ff64-48d1-9fb7-ca7769c77037","pid":"p1","text":"<p>test test #2</p>","user":{"name":"developer one",
+"id":"dev","picture":"/api/v1/avatar/remark.image","profile":"https://remark42.com","admin":true,
+"ip":"ae12fe3b5f129b5cc4cdd2b136b7b7947c4d2741"},"locator":{"site":"remark42","url":"https://radio-t.com/blah2"},"score":0,
+"votes":{},"time":"2018-04-30T01:37:00.861387771-05:00"}`)
+
+	bodyBuf := &bytes.Buffer{}
+	bodyWriter := multipart.NewWriter(bodyBuf)
+	fileWriter, err := bodyWriter.CreateFormFile("file", "import.json")
+	require.NoError(t, err)
+	_, err = io.Copy(fileWriter, r)
+	require.NoError(t, err)
+	contentType := bodyWriter.FormDataContentType()
+	require.NoError(t, bodyWriter.Close())
+
+	authts := strings.Replace(ts.URL, "http://", "http://admin:password@", 1)
+	resp, err := http.Post(authts+"/api/v1/admin/import/form?site=remark42&provider=native", contentType, bodyBuf)
+	assert.Nil(t, err)
+	assert.Equal(t, http.StatusAccepted, resp.StatusCode)
+
+	b, err := ioutil.ReadAll(resp.Body)
+	assert.Nil(t, err)
+	assert.Equal(t, "{\"status\":\"import request accepted\"}\n", string(b))
+
+	waitForImportCompletion(t, ts)
 }
 
 func TestMigrator_ImportFromWP(t *testing.T) {
-	srv, ds, ts := prepImportSrv(t)
-	assert.NotNil(t, srv)
-	defer cleanupImportSrv(srv, ts)
+	ts, _, teardown := startupT(t)
+	defer teardown()
 
 	r := strings.NewReader(strings.Replace(xmlTestWP, "'", "`", -1))
 
 	client := &http.Client{Timeout: 1 * time.Second}
-	req, err := http.NewRequest("POST", ts.URL+"/import?site=radio-t&provider=wordpress&secret=123456", r)
+	req, err := http.NewRequest("POST", ts.URL+"/api/v1/admin/import?site=remark42&provider=wordpress", r)
 	assert.Nil(t, err)
 	req.Header.Add("Content-Type", "application/xml; charset=utf-8")
+	req.SetBasicAuth("admin", "password")
 	resp, err := client.Do(req)
 	assert.Nil(t, err)
-	assert.Equal(t, http.StatusCreated, resp.StatusCode)
+	assert.Equal(t, http.StatusAccepted, resp.StatusCode)
 
 	b, err := ioutil.ReadAll(resp.Body)
 	assert.Nil(t, err)
-	assert.Equal(t, `{"size":3,"status":"ok"}`+"\n", string(b))
+	assert.Equal(t, "{\"status\":\"import request accepted\"}\n", string(b))
 
-	assert.NoError(t, ds.Interface.Close())
-
-	srvAccess, tsAccess := prep(t)
-	require.NotNil(t, srvAccess)
-	defer cleanup(ts, srvAccess)
-
-	res, code := get(t, tsAccess.URL+"/api/v1/last/10?site=radio-t")
-	require.Equal(t, 200, code)
-	comments := []store.Comment{}
-	err = json.Unmarshal([]byte(res), &comments)
-	assert.Nil(t, err)
-	assert.Equal(t, 3, len(comments), "should have 3 comments")
-	t.Logf("%+v", comments)
-	assert.Equal(t, "<p>Looks like <a href=\"http://releases.rancher.com/os/latest\" rel=\"nofollow\">http://releases.rancher.com/os/latest</a> is no longer hosted - installs using this <code>base-url</code> are failing.</p>\n\n<p>I switched to Github with success:</p>\n\n<pre><code>set base-url https://github.com/rancher/os/releases/download/v1.1.1-rc1\n</code></pre>\n\n<p>Thanks for the article!</p>\n",
-		comments[0].Text)
+	waitForImportCompletion(t, ts)
 }
 
 func TestMigrator_ImportRejected(t *testing.T) {
-	srv, _, ts := prepImportSrv(t)
-	assert.NotNil(t, srv)
-	defer cleanupImportSrv(srv, ts)
+	ts, _, teardown := startupT(t)
+	defer teardown()
 
-	r := strings.NewReader(`{"id":"2aa0478c-df1b-46b1-b561-03d507cf482c","pid":"","text":"<p>test test #1</p>","user":{"name":"developer one","id":"dev","picture":"/api/v1/avatar/remark.image","profile":"https://remark42.com","admin":true,"ip":"ae12fe3b5f129b5cc4cdd2b136b7b7947c4d2741"},"locator":{"site":"radio-t","url":"https://radio-t.com/blah1"},"score":0,"votes":{},"time":"2018-04-30T01:37:00.849053725-05:00"}
-	{"id":"83fd97fd-ff64-48d1-9fb7-ca7769c77037","pid":"p1","text":"<p>test test #2</p>","user":{"name":"developer one","id":"dev","picture":"/api/v1/avatar/remark.image","profile":"https://remark42.com","admin":true,"ip":"ae12fe3b5f129b5cc4cdd2b136b7b7947c4d2741"},"locator":{"site":"radio-t","url":"https://radio-t.com/blah2"},"score":0,"votes":{},"time":"2018-04-30T01:37:00.861387771-05:00"}`)
+	r := strings.NewReader(`{"version":1} {"id":"2aa0478c-df1b-46b1-b561-03d507cf482c","pid":"","text":"<p>test test #1</p>",
+"user":{"name":"developer one","id":"dev","picture":"/api/v1/avatar/remark.image","profile":"https://remark42.com",
+"admin":true,"ip":"ae12fe3b5f129b5cc4cdd2b136b7b7947c4d2741"},"locator":{"site":"remark42","url":"https://radio-t.com/blah1"},
+"score":0,"votes":{},"time":"2018-04-30T01:37:00.849053725-05:00"}
+	{"id":"83fd97fd-ff64-48d1-9fb7-ca7769c77037","pid":"p1","text":"<p>test test #2</p>","user":{"name":"developer one",
+"id":"dev","picture":"/api/v1/avatar/remark.image","profile":"https://remark42.com","admin":true,
+"ip":"ae12fe3b5f129b5cc4cdd2b136b7b7947c4d2741"},"locator":{"site":"remark42","url":"https://radio-t.com/blah2"},"score":0,
+"votes":{},"time":"2018-04-30T01:37:00.861387771-05:00"}`)
 
 	client := &http.Client{Timeout: 1 * time.Second}
-	req, err := http.NewRequest("POST", ts.URL+"/import?site=radio-t&provider=native&secret=XYZ", r)
+	req, err := http.NewRequest("POST", ts.URL+"/api/v1/admin/import?site=remark42&provider=native&secret=XYZ", r)
 	assert.Nil(t, err)
 	resp, err := client.Do(req)
 	assert.Nil(t, err)
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
 
-func TestMigrator_Export(t *testing.T) {
-	srv, _, ts := prepImportSrv(t)
-	assert.NotNil(t, srv)
-	defer cleanupImportSrv(srv, ts)
+func TestMigrator_ImportDouble(t *testing.T) {
+	ts, _, teardown := startupT(t)
+	defer teardown()
 
-	r := strings.NewReader(`{"id":"2aa0478c-df1b-46b1-b561-03d507cf482c","pid":"","text":"<p>test test #1</p>","user":{"name":"developer one","id":"dev","picture":"/api/v1/avatar/remark.image","profile":"https://remark42.com","admin":true,"ip":"ae12fe3b5f129b5cc4cdd2b136b7b7947c4d2741"},"locator":{"site":"radio-t","url":"https://radio-t.com/blah1"},"score":0,"votes":{},"time":"2018-04-30T01:37:00.849053725-05:00"}
-	{"id":"83fd97fd-ff64-48d1-9fb7-ca7769c77037","pid":"p1","text":"<p>test test #2</p>","user":{"name":"developer one","id":"dev","picture":"/api/v1/avatar/remark.image","profile":"https://remark42.com","admin":true,"ip":"ae12fe3b5f129b5cc4cdd2b136b7b7947c4d2741"},"locator":{"site":"radio-t","url":"https://radio-t.com/blah2"},"score":0,"votes":{},"time":"2018-04-30T01:37:00.861387771-05:00"}`)
-
+	tmpl := `{"id":"%d","pid":"","text":"<p>test test #1</p>","user":{"name":"developer one","id":"dev",
+"picture":"/api/v1/avatar/remark.image","profile":"https://remark42.com","admin":true,
+"ip":"ae12fe3b5f129b5cc4cdd2b136b7b7947c4d2741"},"locator":{"site":"remark42","url":"https://radio-t.com/blah1"},"score":0,
+"votes":{},"time":"2018-04-30T01:37:00.849053725-05:00"}`
+	recs := []string{}
+	for i := 0; i < 150; i++ {
+		recs = append(recs, fmt.Sprintf(tmpl, i))
+	}
+	r := strings.NewReader(`{"version":1}` + strings.Join(recs, "\n")) // reader with 10k records
 	client := &http.Client{Timeout: 1 * time.Second}
-	req, err := http.NewRequest("POST", ts.URL+"/import?site=radio-t&provider=native&secret=123456", r)
+	req, err := http.NewRequest("POST", ts.URL+"/api/v1/admin/import?site=remark42&provider=native", r)
+	require.NoError(t, err)
+	req.SetBasicAuth("admin", "password")
+	assert.Nil(t, err)
+	resp, err := client.Do(req)
+	assert.Nil(t, err)
+	assert.Equal(t, http.StatusAccepted, resp.StatusCode)
+
+	client = &http.Client{Timeout: 1 * time.Second}
+	req, err = http.NewRequest("POST", ts.URL+"/api/v1/admin/import?site=remark42&provider=native", r)
+	require.NoError(t, err)
+	req.SetBasicAuth("admin", "password")
+	assert.Nil(t, err)
+	resp, err = client.Do(req)
+	assert.Nil(t, err)
+	assert.Equal(t, http.StatusConflict, resp.StatusCode)
+	waitForImportCompletion(t, ts)
+}
+
+func TestMigrator_ImportWaitExpired(t *testing.T) {
+	ts, _, teardown := startupT(t)
+	defer teardown()
+
+	tmpl := `{"id":"%d","pid":"","text":"<p>test test #1</p>","user":{"name":"developer one","id":"dev",
+"picture":"/api/v1/avatar/remark.image","profile":"https://remark42.com","admin":true,
+"ip":"ae12fe3b5f129b5cc4cdd2b136b7b7947c4d2741"},"locator":{"site":"remark42","url":"https://radio-t.com/blah1"},"score":0,
+"votes":{},"time":"2018-04-30T01:37:00.849053725-05:00"}`
+	recs := []string{}
+	for i := 0; i < 150; i++ {
+		recs = append(recs, fmt.Sprintf(tmpl, i))
+	}
+	r := strings.NewReader(`{"version":1}` + strings.Join(recs, "\n")) // reader with 10k records
+	client := &http.Client{Timeout: 1 * time.Second}
+	req, err := http.NewRequest("POST", ts.URL+"/api/v1/admin/import?site=remark42&provider=native", r)
+	require.NoError(t, err)
+	req.SetBasicAuth("admin", "password")
 	require.Nil(t, err)
 	resp, err := client.Do(req)
+	assert.Nil(t, err)
+	assert.Equal(t, http.StatusAccepted, resp.StatusCode)
+
+	client = &http.Client{Timeout: 10 * time.Second}
+	req, err = http.NewRequest("GET", ts.URL+"/api/v1/admin/import/wait?site=remark42&timeout=100ms", nil)
+	require.NoError(t, err)
+	req.SetBasicAuth("admin", "password")
+	assert.NoError(t, err)
+	resp, err = client.Do(req)
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusGatewayTimeout, resp.StatusCode)
+
+	waitForImportCompletion(t, ts)
+}
+
+func TestMigrator_Export(t *testing.T) {
+	ts, _, teardown := startupT(t)
+	defer teardown()
+
+	r := strings.NewReader(`{"version":1} {"id":"2aa0478c-df1b-46b1-b561-03d507cf482c","pid":"","text":"<p>test test #1</p>",
+"user":{"name":"developer one","id":"dev","picture":"/api/v1/avatar/remark.image","profile":"https://remark42.com",
+"admin":true,"ip":"ae12fe3b5f129b5cc4cdd2b136b7b7947c4d2741"},"locator":{"site":"remark42","url":"https://radio-t.com/blah1"},
+"score":0,"votes":{},"time":"2018-04-30T01:37:00.849053725-05:00"}
+	{"id":"83fd97fd-ff64-48d1-9fb7-ca7769c77037","pid":"p1","text":"<p>test test #2</p>","user":{"name":"developer one",
+"id":"dev","picture":"/api/v1/avatar/remark.image","profile":"https://remark42.com","admin":true,
+"ip":"ae12fe3b5f129b5cc4cdd2b136b7b7947c4d2741"},"locator":{"site":"remark42","url":"https://radio-t.com/blah2"},"score":0,
+"votes":{},"time":"2018-04-30T01:37:00.861387771-05:00"}`)
+
+	// import comments first
+	client := &http.Client{Timeout: 1 * time.Second}
+	req, err := http.NewRequest("POST", ts.URL+"/api/v1/admin/import?site=remark42&provider=native", r)
 	require.Nil(t, err)
-	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	req.SetBasicAuth("admin", "password")
+	resp, err := client.Do(req)
+	require.Nil(t, err)
+	require.Equal(t, http.StatusAccepted, resp.StatusCode)
+	waitForImportCompletion(t, ts)
 
 	// check file mode
-	req, err = http.NewRequest("GET", ts.URL+"/export?mode=file&site=radio-t&secret=123456", nil)
+	req, err = http.NewRequest("GET", ts.URL+"/api/v1/admin/export?mode=file&site=remark42", nil)
 	require.Nil(t, err)
+	req.SetBasicAuth("admin", "password")
 	resp, err = client.Do(req)
 	require.Nil(t, err)
 	require.Equal(t, 200, resp.StatusCode)
@@ -124,13 +226,14 @@ func TestMigrator_Export(t *testing.T) {
 	assert.NoError(t, err)
 	ungzBody, err := ioutil.ReadAll(ungzReader)
 	assert.NoError(t, err)
-	assert.Equal(t, 2, strings.Count(string(ungzBody), "\n"))
+	assert.Equal(t, 3, strings.Count(string(ungzBody), "\n"))
 	assert.Equal(t, 2, strings.Count(string(ungzBody), "\"text\""))
 	t.Logf("%s", string(ungzBody))
 
 	// check stream mode
-	req, err = http.NewRequest("GET", ts.URL+"/export?mode=stream&site=radio-t&secret=123456", nil)
+	req, err = http.NewRequest("GET", ts.URL+"/api/v1/admin/export?mode=stream&site=remark42", nil)
 	require.Nil(t, err)
+	req.SetBasicAuth("admin", "password")
 	resp, err = client.Do(req)
 	require.Nil(t, err)
 	require.Equal(t, 200, resp.StatusCode)
@@ -138,44 +241,30 @@ func TestMigrator_Export(t *testing.T) {
 
 	body, err := ioutil.ReadAll(resp.Body)
 	assert.NoError(t, err)
-	assert.Equal(t, 2, strings.Count(string(body), "\n"))
+	assert.Equal(t, 3, strings.Count(string(body), "\n"))
 	assert.Equal(t, 2, strings.Count(string(body), "\"text\""))
 	t.Logf("%s", string(body))
 
-	req, err = http.NewRequest("GET", ts.URL+"/export?site=radio-t&secret=bad", nil)
+	req, err = http.NewRequest("GET", ts.URL+"/api/v1/admin/export?site=remark42", nil)
 	require.Nil(t, err)
 	resp, err = client.Do(req)
 	require.Nil(t, err)
 	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
 
-func prepImportSrv(t *testing.T) (svc *Migrator, ds *service.DataStore, ts *httptest.Server) {
-	b, err := engine.NewBoltDB(bolt.Options{}, engine.BoltSite{FileName: testDb, SiteID: "radio-t"})
-	require.Nil(t, err)
-	adminStore := adminstore.NewStaticStore("123456", []string{"a1", "a2"}, "admin@remark-42.com")
-	dataStore := &service.DataStore{Interface: b, AdminStore: adminStore}
-	svc = &Migrator{
-		DisqusImporter:    &migrator.Disqus{DataStore: dataStore},
-		WordPressImporter: &migrator.WordPress{DataStore: dataStore},
-		NativeImporter:    &migrator.Remark{DataStore: dataStore},
-		NativeExported:    &migrator.Remark{DataStore: dataStore},
-		Cache:             &cache.Nop{},
-		KeyStore:          adminStore,
-	}
-	a := auth.Authenticator{
-		DevPasswd:  "password",
-		Providers:  nil,
-		KeyStore:   adminStore,
-		JWTService: auth.NewJWT(adminStore, false, time.Minute, time.Hour),
-	}
-	routes := svc.withRoutes(chi.NewRouter().With(a.Auth(true)).With(a.AdminOnly))
-	ts = httptest.NewServer(routes)
-	return svc, dataStore, ts
-}
-
-func cleanupImportSrv(_ *Migrator, ts *httptest.Server) {
-	ts.Close()
-	os.Remove(testDb)
+func waitForImportCompletion(t *testing.T, ts *httptest.Server) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("GET", ts.URL+"/api/v1/admin/import/wait?site=remark42", nil)
+	require.NoError(t, err)
+	req.SetBasicAuth("admin", "password")
+	assert.NoError(t, err)
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	assert.Equal(t, 200, resp.StatusCode)
+	b, err := ioutil.ReadAll(resp.Body)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, "{\"site_id\":\"remark42\",\"status\":\"completed\"}\n", string(b))
 }
 
 var xmlTestWP = `

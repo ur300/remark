@@ -1,23 +1,26 @@
 language: go
 
 go:
-  - "1.10.x"
+  - "1.11.x"
+
+install: true
 
 go_import_path: github.com/go-pkgz/mongo
 
 services: mongodb
 
 before_install:
-  - cp -rf .vendor vendor
-  - go get github.com/mattn/goveralls
+  - export TZ=America/Chicago
   - go get gopkg.in/alecthomas/gometalinter.v2
   - $GOPATH/bin/gometalinter.v2 --install
+  - go get github.com/mattn/goveralls
+  - export PATH=$(pwd)/bin:$PATH
+  - export MONGO_TEST=mongodb://127.0.0.1:27017
 
-before_script:
-  - sleep 3
 
 script:
-  - export MONGO_TEST=mongodb://127.0.0.1:27017
-  - go test ./...
-  - $GOPATH/bin/gometalinter.v2 --exclude=test --exclude=mock --exclude=vendor ./...
-  - $GOPATH/bin/goveralls -service=travis-ci
+  - GO111MODULE=on go get ./...
+  - GO111MODULE=on go mod vendor
+  - GO111MODULE=on go test  -v -mod=vendor -covermode=count -coverprofile=profile.cov ./... || travis_terminate 1;
+  - $GOPATH/bin/gometalinter.v2 --deadline=120s --exclude=test --exclude=mock --exclude=vendor --exclude=_example --disable-all --enable=errcheck --enable=vet --enable=vetshadow --enable=megacheck --enable=ineffassign --enable=varcheck --enable=unconvert --enable=deadcode --enable=interfacer --enable=gotype ./... || travis_terminate 1;
+  - $GOPATH/bin/goveralls -coverprofile=profile.cov -service=travis-ci

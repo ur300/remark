@@ -1,15 +1,13 @@
 package cmd
 
 import (
-	"log"
 	"path"
-	"time"
 
-	"github.com/coreos/bbolt"
-	"github.com/go-pkgz/mongo"
+	bolt "github.com/coreos/bbolt"
+	log "github.com/go-pkgz/lgr"
 	"github.com/pkg/errors"
 
-	"github.com/umputun/remark/backend/app/store/avatar"
+	"github.com/go-pkgz/auth/avatar"
 )
 
 // AvatarCommand set of flags and command for avatar migration
@@ -18,7 +16,6 @@ import (
 type AvatarCommand struct {
 	AvatarSrc AvatarGroup `group:"src" namespace:"src"`
 	AvatarDst AvatarGroup `group:"dst" namespace:"dst"`
-	Mongo     MongoGroup  `group:"mongo" namespace:"mongo" env-namespace:"MONGO"`
 
 	migrator AvatarMigrator
 	CommonOpts
@@ -31,6 +28,7 @@ type AvatarMigrator interface {
 
 type avatarMigrator struct{}
 
+// Migrate from one avatar store to another. Can be used to convert between stores
 func (a avatarMigrator) Migrate(dst, src avatar.Store) (int, error) {
 	return avatar.Migrate(dst, src)
 }
@@ -76,26 +74,12 @@ func (ac *AvatarCommand) makeAvatarStore(gr AvatarGroup) (avatar.Store, error) {
 		if err := makeDirs(gr.FS.Path); err != nil {
 			return nil, err
 		}
-		return avatar.NewLocalFS(gr.FS.Path, gr.RszLmt), nil
-	case "mongo":
-		mgServer, err := ac.makeMongo()
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to create mongo server")
-		}
-		conn := mongo.NewConnection(mgServer, ac.Mongo.DB, "")
-		return avatar.NewGridFS(conn, gr.RszLmt), nil
+		return avatar.NewLocalFS(gr.FS.Path), nil
 	case "bolt":
 		if err := makeDirs(path.Dir(gr.Bolt.File)); err != nil {
 			return nil, err
 		}
-		return avatar.NewBoltDB(gr.Bolt.File, bolt.Options{}, gr.RszLmt)
+		return avatar.NewBoltDB(gr.Bolt.File, bolt.Options{})
 	}
 	return nil, errors.Errorf("unsupported avatar store type %s", gr.Type)
-}
-
-func (ac *AvatarCommand) makeMongo() (result *mongo.Server, err error) {
-	if ac.Mongo.URL == "" {
-		return nil, errors.New("no mongo URL provided")
-	}
-	return mongo.NewServerWithURL(ac.Mongo.URL, 10*time.Second)
 }

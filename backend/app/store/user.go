@@ -2,14 +2,15 @@ package store
 
 import (
 	"crypto/hmac"
-	"crypto/sha1"
+	"crypto/sha1" // nolint
 	"encoding/hex"
 	"fmt"
 	"hash"
 	"hash/crc64"
 	"io"
-	"log"
 	"regexp"
+
+	log "github.com/go-pkgz/lgr"
 )
 
 // User holds user-related info
@@ -21,6 +22,7 @@ type User struct {
 	Admin    bool   `json:"admin"`
 	Blocked  bool   `json:"block,omitempty"`
 	Verified bool   `json:"verified,omitempty"`
+	SiteID   string `json:"site_id,omitempty"`
 }
 
 var reValidSha = regexp.MustCompile("^[a-fA-F0-9]{40}$")
@@ -40,7 +42,7 @@ func HashValue(val string, secret string) string {
 // EncodeID hashes id to sha1. The function intentionally left outside of User struct because in some cases
 // we need hashing for parts of id, in some others hashing for non-User values.
 func EncodeID(id string) string {
-	return hashWithFallback(sha1.New(), id)
+	return hashWithFallback(sha1.New(), id) // nolint
 }
 
 // hashWithFallback tries to has val with hash.Hash and fallback to crc if needed
