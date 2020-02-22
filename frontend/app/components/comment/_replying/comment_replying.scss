@@ -1,8 +1,7 @@
 .comment_replying {
-  .comment__input {
-    border: 12px solid;
-    border-top-width: 6px;
-  }
+  padding-bottom: 0;
+  position: relative;
+  z-index: 1;
 
   .comment__score {
     top: 4px;
@@ -12,7 +11,10 @@
   /* it isn't mobile first, but it's fine here */
   @media (-moz-touch-enabled: 1) and (max-width: 768px), (pointer: coarse) and (max-width: 768px) {
     border: 8px solid;
-    padding-bottom: 0;
+
+    .comment__info {
+      padding-left: 8px;
+    }
 
     .comment__body {
       padding: 8px 8px 0;
@@ -26,7 +28,7 @@
     }
 
     .comment__score {
-      top: 12px;
+      top: 5px;
       right: 8px;
     }
   }

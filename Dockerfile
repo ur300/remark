@@ -1,18 +1,6 @@
 FROM umputun/baseimage:buildgo-latest as build-backend
 
-ARG COVERALLS_TOKEN
 ARG CI
-ARG GIT_BRANCH
-ARG TRAVIS
-ARG TRAVIS_BRANCH
-ARG TRAVIS_COMMIT
-ARG TRAVIS_JOB_ID
-ARG TRAVIS_JOB_NUMBER
-ARG TRAVIS_OS_NAME
-ARG TRAVIS_PULL_REQUEST
-ARG TRAVIS_PULL_REQUEST_SHA
-ARG TRAVIS_REPO_SLUG
-ARG TRAVIS_TAG
 ARG DRONE
 ARG DRONE_TAG
 ARG DRONE_COMMIT
@@ -20,9 +8,10 @@ ARG DRONE_BRANCH
 ARG DRONE_PULL_REQUEST
 
 ARG SKIP_BACKEND_TEST
+ARG BACKEND_TEST_TIMEOUT
 
 ADD backend /build/backend
-ADD .git /build/.git
+ADD .git/ /build/backend/.git/
 WORKDIR /build/backend
 
 ENV GOFLAGS="-mod=vendor"
@@ -31,30 +20,17 @@ ENV GOFLAGS="-mod=vendor"
 RUN \
     cd app && \
     if [ -z "$SKIP_BACKEND_TEST" ] ; then \
-        go test -p 1 -timeout=30s -covermode=count -coverprofile=/profile.cov_tmp ./... && \
+        go test -p 1 -timeout="${BACKEND_TEST_TIMEOUT:-300s}" -covermode=count -coverprofile=/profile.cov_tmp ./... && \
         cat /profile.cov_tmp | grep -v "_mock.go" > /profile.cov ; \
-    else echo "skip backend test" ; fi
-
-# linters
-RUN if [ -z "$SKIP_BACKEND_TEST" ] ; then \
-        golangci-lint run --out-format=tab --disable-all --tests=false --enable=unconvert \
-        --enable=megacheck --enable=structcheck --enable=gas --enable=gocyclo --enable=dupl --enable=misspell \
-        --enable=unparam --enable=varcheck --enable=deadcode --enable=typecheck \
-        --enable=ineffassign --enable=varcheck ./... ; \
-    else echo "skip backend linters" ; fi
-
-# submit coverage to coverals if COVERALLS_TOKEN in env
-RUN if [ -z "$COVERALLS_TOKEN" ] ; then \
-    echo "coverall not enabled" ; \
-    else goveralls -coverprofile=/profile.cov -service=travis-ci -repotoken $COVERALLS_TOKEN || echo "coverall failed!"; fi
+        golangci-lint run --config ../.golangci.yml ./... ; \
+    else echo "skip backend tests and linter" ; fi
 
 # if DRONE presented use DRONE_* git env to make version
 RUN \
-    if [ -z "$DRONE" ] ; then echo "runs outside of drone" && version="local"; \
-    else version=${DRONE_TAG}${DRONE_BRANCH}${DRONE_PULL_REQUEST}-${DRONE_COMMIT:0:7}-$(date +%Y%m%d-%H:%M:%S); fi && \
+    if [ -z "$DRONE" ] ; then echo "runs outside of drone" && version="$(/script/git-rev.sh)" ; \
+    else version=${DRONE_TAG}${DRONE_BRANCH}${DRONE_PULL_REQUEST}-${DRONE_COMMIT:0:7}-$(date +%Y%m%d-%H:%M:%S) ; fi && \
     echo "version=$version" && \
     go build -o remark42 -ldflags "-X main.revision=${version} -s -w" ./app
-
 
 FROM node:10.11-alpine as build-frontend-deps
 
@@ -75,10 +51,9 @@ ARG NODE_ENV=production
 COPY --from=build-frontend-deps /srv/frontend/node_modules /srv/frontend/node_modules
 ADD frontend /srv/frontend
 RUN cd /srv/frontend && \
-    if [ -z "$SKIP_FRONTEND_TEST" ] ; then npx run-p lint test build ; \
+    if [ -z "$SKIP_FRONTEND_TEST" ] ; then npx run-p check lint lint:style test build ; \
     else echo "skip frontend tests and lint" ; npm run build ; fi && \
     rm -rf ./node_modules
-
 
 FROM umputun/baseimage:app
 

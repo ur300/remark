@@ -1,30 +1,35 @@
-/** @jsx h */
-import { Component, h, RenderableProps } from 'preact';
+/** @jsx createElement */
+import { createElement, Component, createRef, RenderableProps } from 'preact';
 import b from 'bem-react-helper';
 
-import { Button } from '@app/components/button';
 import { Theme } from '@app/common/types';
 import { sleep } from '@app/utils/sleep';
+import { Button } from '@app/components/button';
 
-interface Props {
+type Props = RenderableProps<{
   title: string;
   titleClass?: string;
   heading?: string;
   isActive?: boolean;
+  disabled?: boolean;
+  buttonTitle?: string;
   onTitleClick?: () => void;
   mix?: string;
   theme: Theme;
   onOpen?: (root: HTMLDivElement) => unknown;
   onClose?: (root: HTMLDivElement) => unknown;
-}
+}>;
 
 interface State {
   isActive: boolean;
   contentTranslateX: number;
 }
 
-export default class Dropdown extends Component<Props, State> {
-  rootNode?: HTMLDivElement;
+export class Dropdown extends Component<Props, State> {
+  rootNode = createRef<HTMLDivElement>();
+  storedDocumentHeight: string | null = null;
+  storedDocumentHeightSet: boolean = false;
+  checkInterval: number | undefined = undefined;
 
   constructor(props: Props) {
     super(props);
@@ -40,7 +45,7 @@ export default class Dropdown extends Component<Props, State> {
     this.__onClose = this.__onClose.bind(this);
   }
 
-  onTitleClick() {
+  onTitleClick = () => {
     const isActive = !this.state.isActive;
     const contentTranslateX = isActive ? this.state.contentTranslateX : 0;
     this.setState(
@@ -52,10 +57,10 @@ export default class Dropdown extends Component<Props, State> {
         await this.__adjustDropDownContent();
         if (isActive) {
           this.__onOpen();
-          this.props.onOpen && this.props.onOpen(this.rootNode!);
+          this.props.onOpen && this.props.onOpen(this.rootNode.current!);
         } else {
           this.__onClose();
-          this.props.onClose && this.props.onClose(this.rootNode!);
+          this.props.onClose && this.props.onClose(this.rootNode.current!);
         }
 
         if (this.props.onTitleClick) {
@@ -63,16 +68,12 @@ export default class Dropdown extends Component<Props, State> {
         }
       }
     );
-  }
-
-  storedDocumentHeight: string | null = null;
-  storedDocumentHeightSet: boolean = false;
-  checkInterval: number | undefined = undefined;
+  };
 
   __onOpen() {
     const isChildOfDropDown = (() => {
-      if (!this.rootNode) return false;
-      let parent = this.rootNode.parentElement!;
+      if (!this.rootNode.current) return false;
+      let parent = this.rootNode.current.parentElement!;
       while (parent !== document.body) {
         if (parent.classList.contains('dropdown')) return true;
         parent = parent.parentElement!;
@@ -87,10 +88,11 @@ export default class Dropdown extends Component<Props, State> {
     let prevDcBottom: number | null = null;
 
     this.checkInterval = window.setInterval(() => {
-      if (!this.rootNode || !this.state.isActive) return;
+      if (!this.rootNode.current || !this.state.isActive) return;
       const windowHeight = window.innerHeight;
       const dcBottom = (() => {
-        const dc = Array.from(this.rootNode.children).find(c => c.classList.contains('dropdown__content'));
+        // TODO: use ref
+        const dc = Array.from(this.rootNode.current.children).find(c => c.classList.contains('dropdown__content'));
         if (!dc) return 0;
         const rect = dc.getBoundingClientRect();
         return window.scrollY + Math.abs(rect.top) + dc.scrollHeight + 10;
@@ -106,15 +108,16 @@ export default class Dropdown extends Component<Props, State> {
   __onClose() {
     window.clearInterval(this.checkInterval);
     if (this.storedDocumentHeightSet) {
-      document.body.style.minHeight = this.storedDocumentHeight;
+      document.body.style.minHeight = typeof this.storedDocumentHeight === 'string' ? this.storedDocumentHeight : '';
     }
   }
 
   async __adjustDropDownContent() {
-    if (!this.rootNode) return;
-    const dc = this.rootNode.querySelector<HTMLDivElement>('.dropdown__content');
+    if (!this.rootNode.current) return;
+    // TODO: use ref
+    const dc = this.rootNode.current.querySelector<HTMLDivElement>('.dropdown__content');
     if (!dc) return;
-    await sleep(10);
+    await sleep(0);
     const rect = dc.getBoundingClientRect();
     if (rect.left > 0) {
       const wWindow = window.innerWidth;
@@ -144,14 +147,14 @@ export default class Dropdown extends Component<Props, State> {
         },
         () => {
           this.__onClose();
-          this.props.onClose && this.props.onClose(this.rootNode!);
+          this.props.onClose && this.props.onClose(this.rootNode.current!);
         }
       );
     } catch (e) {}
   }
 
   onOutsideClick(e: MouseEvent) {
-    if (!this.rootNode || this.rootNode.contains(e.target as Node) || !this.state.isActive) return;
+    if (!this.rootNode.current || this.rootNode.current.contains(e.target as Node) || !this.state.isActive) return;
     this.setState(
       {
         contentTranslateX: 0,
@@ -159,7 +162,7 @@ export default class Dropdown extends Component<Props, State> {
       },
       () => {
         this.__onClose();
-        this.props.onClose && this.props.onClose(this.rootNode!);
+        this.props.onClose && this.props.onClose(this.rootNode.current!);
       }
     );
   }
@@ -176,32 +179,32 @@ export default class Dropdown extends Component<Props, State> {
     window.removeEventListener('message', this.receiveMessage);
   }
 
-  render(props: RenderableProps<Props>, { isActive }: State) {
-    const { title, titleClass, heading, children, mix } = props;
-
+  render({ title, titleClass, heading, children, mix, theme, disabled, buttonTitle }: Props, { isActive }: State) {
     return (
-      <div className={b('dropdown', { mix }, { theme: props.theme, active: isActive })} ref={r => (this.rootNode = r)}>
+      <div className={b('dropdown', { mix }, { theme, active: isActive })} ref={this.rootNode}>
         <Button
           aria-haspopup="listbox"
           aria-expanded={isActive && 'true'}
-          mix="dropdown__title"
-          type="button"
-          onClick={() => this.onTitleClick()}
-          theme="light"
-          className={titleClass}
+          onClick={this.onTitleClick}
+          theme={theme}
+          mix={['dropdown__title', titleClass]}
+          kind="link"
+          disabled={disabled}
+          title={buttonTitle}
         >
           {title}
         </Button>
-
-        <div
-          className="dropdown__content"
-          tabIndex={-1}
-          role="listbox"
-          style={{ transform: `translateX(${this.state.contentTranslateX}px)` }}
-        >
-          {heading && <div className="dropdown__heading">{heading}</div>}
-          <div className="dropdown__items">{children}</div>
-        </div>
+        {isActive && (
+          <div
+            className="dropdown__content"
+            tabIndex={-1}
+            role="listbox"
+            style={{ transform: `translateX(${this.state.contentTranslateX}px)` }}
+          >
+            {heading && <div className="dropdown__heading">{heading}</div>}
+            <div className="dropdown__items">{children}</div>
+          </div>
+        )}
       </div>
     );
   }

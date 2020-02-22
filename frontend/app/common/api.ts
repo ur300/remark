@@ -6,7 +6,7 @@ import fetcher from './fetcher';
 /* common */
 
 const __loginAnonymously = (username: string): Promise<User | null> => {
-  const url = `/auth/anonymous/login?user=${encodeURIComponent(username)}&aud=${siteId}?from=${encodeURIComponent(
+  const url = `/auth/anonymous/login?user=${encodeURIComponent(username)}&aud=${siteId}&from=${encodeURIComponent(
     location.origin + location.pathname + '?selfClose'
   )}`;
   return fetcher.get<User>({ url, withCredentials: true, overriddenApiBase: '' });
@@ -207,7 +207,6 @@ export const removeComment = (id: Comment['id']) =>
 export const removeMyComment = (id: Comment['id']): Promise<void> =>
   fetcher.put({
     url: `/comment/${id}?url=${url}`,
-    // eslint-disable-next-line @typescript-eslint/no-object-literal-type-assertion
     body: {
       delete: true,
     } as object,
@@ -275,6 +274,28 @@ export const uploadImage = (image: File): Promise<Image> => {
       url: BASE_URL + API_BASE + '/picture/' + resp.id,
     }));
 };
+
+/**
+ * Start process of email subscription to updates
+ * @param emailAddress email for subscription
+ */
+export const emailVerificationForSubscribe = (emailAddress: string) =>
+  fetcher.post({
+    url: `/email/subscribe?site=${siteId}&address=${emailAddress}`,
+    withCredentials: true,
+  });
+
+/**
+ * Confirmation of email subscription to updates
+ * @param token confirmation token from email
+ */
+export const emailConfirmationForSubscribe = (token: string) =>
+  fetcher.post({ url: `/email/confirm?site=${siteId}&tkn=${encodeURIComponent(token)}`, withCredentials: true });
+
+/**
+ * Decline current subscription to updates
+ */
+export const unsubscribeFromEmailUpdates = () => fetcher.delete({ url: `/email`, withCredentials: true });
 
 export default {
   logIn,

@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -15,6 +16,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/umputun/remark/backend/app/store"
+	"github.com/umputun/remark/backend/app/store/service"
 )
 
 func TestMigrator_Import(t *testing.T) {
@@ -34,16 +38,16 @@ func TestMigrator_Import(t *testing.T) {
 	req, err := http.NewRequest("POST", ts.URL+"/api/v1/admin/import?site=remark42&provider=native", r)
 	require.NoError(t, err)
 	req.SetBasicAuth("admin", "password")
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	resp, err := client.Do(req)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, http.StatusAccepted, resp.StatusCode)
 
 	b, err := ioutil.ReadAll(resp.Body)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, "{\"status\":\"import request accepted\"}\n", string(b))
 
-	waitForImportCompletion(t, ts)
+	waitForMigrationCompletion(t, ts)
 }
 
 func TestMigrator_ImportForm(t *testing.T) {
@@ -70,14 +74,14 @@ func TestMigrator_ImportForm(t *testing.T) {
 
 	authts := strings.Replace(ts.URL, "http://", "http://admin:password@", 1)
 	resp, err := http.Post(authts+"/api/v1/admin/import/form?site=remark42&provider=native", contentType, bodyBuf)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, http.StatusAccepted, resp.StatusCode)
 
 	b, err := ioutil.ReadAll(resp.Body)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, "{\"status\":\"import request accepted\"}\n", string(b))
 
-	waitForImportCompletion(t, ts)
+	waitForMigrationCompletion(t, ts)
 }
 
 func TestMigrator_ImportFromWP(t *testing.T) {
@@ -88,18 +92,18 @@ func TestMigrator_ImportFromWP(t *testing.T) {
 
 	client := &http.Client{Timeout: 1 * time.Second}
 	req, err := http.NewRequest("POST", ts.URL+"/api/v1/admin/import?site=remark42&provider=wordpress", r)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	req.Header.Add("Content-Type", "application/xml; charset=utf-8")
 	req.SetBasicAuth("admin", "password")
 	resp, err := client.Do(req)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, http.StatusAccepted, resp.StatusCode)
 
 	b, err := ioutil.ReadAll(resp.Body)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, "{\"status\":\"import request accepted\"}\n", string(b))
 
-	waitForImportCompletion(t, ts)
+	waitForMigrationCompletion(t, ts)
 }
 
 func TestMigrator_ImportRejected(t *testing.T) {
@@ -117,9 +121,9 @@ func TestMigrator_ImportRejected(t *testing.T) {
 
 	client := &http.Client{Timeout: 1 * time.Second}
 	req, err := http.NewRequest("POST", ts.URL+"/api/v1/admin/import?site=remark42&provider=native&secret=XYZ", r)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	resp, err := client.Do(req)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
 
@@ -132,7 +136,7 @@ func TestMigrator_ImportDouble(t *testing.T) {
 "ip":"ae12fe3b5f129b5cc4cdd2b136b7b7947c4d2741"},"locator":{"site":"remark42","url":"https://radio-t.com/blah1"},"score":0,
 "votes":{},"time":"2018-04-30T01:37:00.849053725-05:00"}`
 	recs := []string{}
-	for i := 0; i < 150; i++ {
+	for i := 0; i < 50; i++ {
 		recs = append(recs, fmt.Sprintf(tmpl, i))
 	}
 	r := strings.NewReader(`{"version":1}` + strings.Join(recs, "\n")) // reader with 10k records
@@ -140,20 +144,20 @@ func TestMigrator_ImportDouble(t *testing.T) {
 	req, err := http.NewRequest("POST", ts.URL+"/api/v1/admin/import?site=remark42&provider=native", r)
 	require.NoError(t, err)
 	req.SetBasicAuth("admin", "password")
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	resp, err := client.Do(req)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, http.StatusAccepted, resp.StatusCode)
 
-	client = &http.Client{Timeout: 1 * time.Second}
+	client = &http.Client{Timeout: 5 * time.Second}
 	req, err = http.NewRequest("POST", ts.URL+"/api/v1/admin/import?site=remark42&provider=native", r)
 	require.NoError(t, err)
 	req.SetBasicAuth("admin", "password")
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	resp, err = client.Do(req)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, http.StatusConflict, resp.StatusCode)
-	waitForImportCompletion(t, ts)
+	waitForMigrationCompletion(t, ts)
 }
 
 func TestMigrator_ImportWaitExpired(t *testing.T) {
@@ -164,22 +168,23 @@ func TestMigrator_ImportWaitExpired(t *testing.T) {
 "picture":"/api/v1/avatar/remark.image","profile":"https://remark42.com","admin":true,
 "ip":"ae12fe3b5f129b5cc4cdd2b136b7b7947c4d2741"},"locator":{"site":"remark42","url":"https://radio-t.com/blah1"},"score":0,
 "votes":{},"time":"2018-04-30T01:37:00.849053725-05:00"}`
-	recs := []string{}
-	for i := 0; i < 150; i++ {
+	nRecs := 50
+	recs := make([]string, 0, nRecs)
+	for i := 0; i < nRecs; i++ {
 		recs = append(recs, fmt.Sprintf(tmpl, i))
 	}
-	r := strings.NewReader(`{"version":1}` + strings.Join(recs, "\n")) // reader with 10k records
-	client := &http.Client{Timeout: 1 * time.Second}
+	r := strings.NewReader(`{"version":1}` + strings.Join(recs, "\n")) // reader with `nRecs` records
+	client := &http.Client{Timeout: 5 * time.Second}
 	req, err := http.NewRequest("POST", ts.URL+"/api/v1/admin/import?site=remark42&provider=native", r)
 	require.NoError(t, err)
 	req.SetBasicAuth("admin", "password")
-	require.Nil(t, err)
+	require.NoError(t, err)
 	resp, err := client.Do(req)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, http.StatusAccepted, resp.StatusCode)
 
-	client = &http.Client{Timeout: 10 * time.Second}
-	req, err = http.NewRequest("GET", ts.URL+"/api/v1/admin/import/wait?site=remark42&timeout=100ms", nil)
+	client = &http.Client{Timeout: 5 * time.Second}
+	req, err = http.NewRequest("GET", ts.URL+"/api/v1/admin/wait?site=remark42&timeout=5ms", nil)
 	require.NoError(t, err)
 	req.SetBasicAuth("admin", "password")
 	assert.NoError(t, err)
@@ -187,7 +192,7 @@ func TestMigrator_ImportWaitExpired(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, http.StatusGatewayTimeout, resp.StatusCode)
 
-	waitForImportCompletion(t, ts)
+	waitForMigrationCompletion(t, ts)
 }
 
 func TestMigrator_Export(t *testing.T) {
@@ -206,19 +211,19 @@ func TestMigrator_Export(t *testing.T) {
 	// import comments first
 	client := &http.Client{Timeout: 1 * time.Second}
 	req, err := http.NewRequest("POST", ts.URL+"/api/v1/admin/import?site=remark42&provider=native", r)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	req.SetBasicAuth("admin", "password")
 	resp, err := client.Do(req)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Equal(t, http.StatusAccepted, resp.StatusCode)
-	waitForImportCompletion(t, ts)
+	waitForMigrationCompletion(t, ts)
 
 	// check file mode
 	req, err = http.NewRequest("GET", ts.URL+"/api/v1/admin/export?mode=file&site=remark42", nil)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	req.SetBasicAuth("admin", "password")
 	resp, err = client.Do(req)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Equal(t, 200, resp.StatusCode)
 	require.Equal(t, "application/gzip", resp.Header.Get("Content-Type"))
 
@@ -232,10 +237,10 @@ func TestMigrator_Export(t *testing.T) {
 
 	// check stream mode
 	req, err = http.NewRequest("GET", ts.URL+"/api/v1/admin/export?mode=stream&site=remark42", nil)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	req.SetBasicAuth("admin", "password")
 	resp, err = client.Do(req)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Equal(t, 200, resp.StatusCode)
 	require.Equal(t, "text/plain; charset=utf-8", resp.Header.Get("Content-Type"))
 
@@ -246,18 +251,115 @@ func TestMigrator_Export(t *testing.T) {
 	t.Logf("%s", string(body))
 
 	req, err = http.NewRequest("GET", ts.URL+"/api/v1/admin/export?site=remark42", nil)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	resp, err = client.Do(req)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
 
-func waitForImportCompletion(t *testing.T, ts *httptest.Server) {
+func TestMigrator_Remap(t *testing.T) {
+	ts, srv, teardown := startupT(t)
+	defer teardown()
+
+	// create 2 comments in https://remark42.com/demo/
+	c1 := store.Comment{Text: "first comment", Timestamp: time.Now(),
+		Locator: store.Locator{SiteID: "remark42", URL: "https://remark42.com/demo/"}, User: store.User{ID: "u1"}}
+	_, err := srv.DataService.Create(c1)
+	require.NoError(t, err)
+	c2 := store.Comment{Text: "second comment", Timestamp: time.Now(),
+		Locator: store.Locator{SiteID: "remark42", URL: "https://remark42.com/demo/"}, User: store.User{ID: "u2"}}
+	_, err = srv.DataService.Create(c2)
+	require.NoError(t, err)
+
+	// create 1 comment in https://remark42.com/demo-another/
+	c3 := store.Comment{Text: "third comment", Timestamp: time.Now(),
+		Locator: store.Locator{SiteID: "remark42", URL: "https://remark42.com/demo-another/"}, User: store.User{ID: "u3"}}
+	_, err = srv.DataService.Create(c3)
+	require.NoError(t, err)
+
+	// set url https://remark42.com/demo-another/ to be readonly
+	err = srv.DataService.SetMetas("remark42", []service.UserMetaData{}, []service.PostMetaData{{
+		URL:      "https://remark42.com/demo-another/",
+		ReadOnly: true,
+	}})
+	require.NoError(t, err)
+
+	// check that comments created as expected
+	res, code := get(t, ts.URL+"/api/v1/find?site=remark42&url=https://remark42.com/demo/")
+	require.Equal(t, 200, code)
+	comments := commentsWithInfo{}
+	err = json.Unmarshal([]byte(res), &comments)
+	require.NoError(t, err)
+	require.Equal(t, 2, comments.Info.Count)
+	require.False(t, comments.Info.ReadOnly)
+
+	res, code = get(t, ts.URL+"/api/v1/find?site=remark42&url=https://remark42.com/demo-another/")
+	require.Equal(t, 200, code)
+	comments = commentsWithInfo{}
+	err = json.Unmarshal([]byte(res), &comments)
+	require.NoError(t, err)
+	require.Equal(t, 1, comments.Info.Count)
+	require.True(t, comments.Info.ReadOnly)
+
+	// we want remap urls to another domain - www.remark42.com
+	rules := "https://remark42.com/* https://www.remark42.com/*"
+	resp, err := post(t, ts.URL+"/api/v1/admin/remap?site=remark42", rules) // auth as admin
+	require.NoError(t, err)
+	require.Equal(t, http.StatusAccepted, resp.StatusCode)
+	waitForMigrationCompletion(t, ts)
+
+	// after remap finished we should find comments from new urls
+	res, code = get(t, ts.URL+"/api/v1/find?site=remark42&url=https://www.remark42.com/demo/")
+	require.Equal(t, 200, code)
+	comments = commentsWithInfo{}
+	err = json.Unmarshal([]byte(res), &comments)
+	require.NoError(t, err)
+	require.Equal(t, 2, comments.Info.Count)
+	require.False(t, comments.Info.ReadOnly)
+
+	res, code = get(t, ts.URL+"/api/v1/find?site=remark42&url=https://www.remark42.com/demo-another/")
+	require.Equal(t, 200, code)
+	comments = commentsWithInfo{}
+	err = json.Unmarshal([]byte(res), &comments)
+	require.NoError(t, err)
+	require.Equal(t, 1, comments.Info.Count)
+	require.True(t, comments.Info.ReadOnly)
+
+	// should find nothing from previous url
+	res, code = get(t, ts.URL+"/api/v1/find?site=remark42&url=https://remark42.com/demo/")
+	require.Equal(t, 200, code)
+	comments = commentsWithInfo{}
+	err = json.Unmarshal([]byte(res), &comments)
+	require.NoError(t, err)
+	require.Equal(t, 0, comments.Info.Count)
+
+	res, code = get(t, ts.URL+"/api/v1/find?site=remark42&url=https://remark42.com/demo-another/")
+	require.Equal(t, 200, code)
+	comments = commentsWithInfo{}
+	err = json.Unmarshal([]byte(res), &comments)
+	require.NoError(t, err)
+	require.Equal(t, 0, comments.Info.Count)
+}
+
+func TestMigrator_RemapReject(t *testing.T) {
+	ts, _, teardown := startupT(t)
+	defer teardown()
+
+	// without admin credentials
+	client := &http.Client{Timeout: 1 * time.Second}
+	rules := strings.NewReader(`https://remark42.com/* https://www.remark42.com/*`)
+	req, err := http.NewRequest("POST", ts.URL+"/api/v1/admin/remap?site=remark42", rules)
+	require.NoError(t, err)
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+}
+
+func waitForMigrationCompletion(t *testing.T, ts *httptest.Server) {
 	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest("GET", ts.URL+"/api/v1/admin/import/wait?site=remark42", nil)
+	req, err := http.NewRequest("GET", ts.URL+"/api/v1/admin/wait?site=remark42", nil)
 	require.NoError(t, err)
 	req.SetBasicAuth("admin", "password")
-	assert.NoError(t, err)
 	resp, err := client.Do(req)
 	require.NoError(t, err)
 	assert.Equal(t, 200, resp.StatusCode)

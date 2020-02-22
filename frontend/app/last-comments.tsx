@@ -1,10 +1,14 @@
 /* eslint-disable no-console, @typescript-eslint/camelcase */
-/** @jsx h */
+/** @jsx createElement */
 declare let remark_config: LastCommentsConfig;
-
+// Must be the first import
+if (process.env.NODE_ENV === 'development') {
+  // Must use require here as import statements are only allowed
+  // to exist at the top of a file.
+  require('preact/debug');
+}
 import loadPolyfills from '@app/common/polyfills';
-import '@app/utils/patchPreactContext';
-import { h, render } from 'preact';
+import { createElement, render } from 'preact';
 import 'preact/debug';
 import { getLastComments } from './common/api';
 import { LastCommentsConfig } from '@app/common/config-types';

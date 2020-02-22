@@ -1,24 +1,30 @@
-/** @jsx h */
-import { h, Component, RenderableProps } from 'preact';
+/** @jsx createElement */
+import { createElement, Component, createRef } from 'preact';
+import { forwardRef } from 'preact/compat';
 import b from 'bem-react-helper';
+import { useSelector } from 'react-redux';
 import { Theme, User } from '@app/common/types';
 import { sendEmailVerificationRequest } from '@app/common/api';
 import { extractErrorMessageFromResponse } from '@app/utils/errorUtils';
-import { connect } from 'preact-redux';
 import { getHandleClickProps } from '@app/common/accessibility';
 import { sleep } from '@app/utils/sleep';
-import TextareaAutosize from '@app/components/input/textarea-autosize';
+import TextareaAutosize from '@app/components/comment-form/textarea-autosize';
+import { Input } from '@app/components/input';
+import { Button } from '@app/components/button';
+import { isJwtExpired } from '@app/utils/jwt';
 
 const mapStateToProps = () => ({
   sendEmailVerification: sendEmailVerificationRequest,
 });
 
-export type Props = {
+interface OwnProps {
   onSignIn(token: string): Promise<User | null>;
   onSuccess?(user: User): Promise<void>;
   theme: Theme;
   className?: string;
-} & ReturnType<typeof mapStateToProps>;
+}
+
+export type Props = OwnProps & ReturnType<typeof mapStateToProps>;
 
 export interface State {
   usernameValue: string;
@@ -33,60 +39,47 @@ export class EmailLoginForm extends Component<Props, State> {
   static usernameRegex = /^[a-zA-Z][\w ]+$/;
   static emailRegex = /[^@]+@[^.]+\..+/;
 
-  inputRef?: HTMLInputElement;
-  tokenRef?: TextareaAutosize;
+  usernameInputRef = createRef<HTMLInputElement>();
+  tokenRef = createRef<TextareaAutosize>();
 
-  constructor(props: Props) {
-    super(props);
+  state = {
+    usernameValue: '',
+    addressValue: '',
+    tokenValue: '',
+    verificationSent: false,
+    loading: false,
+    error: null,
+  };
 
-    this.state = {
-      usernameValue: '',
-      addressValue: '',
-      tokenValue: '',
-      verificationSent: false,
-      loading: false,
-      error: null,
-    };
-
-    this.focus = this.focus.bind(this);
-    this.onVerificationSubmit = this.onVerificationSubmit.bind(this);
-    this.onSubmit = this.onSubmit.bind(this);
-    this.onUsernameChange = this.onUsernameChange.bind(this);
-    this.onAddressChange = this.onAddressChange.bind(this);
-    this.onTokenChange = this.onTokenChange.bind(this);
-    this.goBack = this.goBack.bind(this);
-  }
-
-  async focus() {
+  focus = async () => {
     await sleep(100);
-    if (this.inputRef) {
-      this.inputRef.focus();
+    if (this.usernameInputRef.current) {
+      this.usernameInputRef.current.focus();
       return;
     }
-    this.tokenRef && this.tokenRef.textareaRef && this.tokenRef.textareaRef.select();
-  }
+    this.tokenRef.current && this.tokenRef.current.textareaRef && this.tokenRef.current.textareaRef.select();
+  };
 
-  async onVerificationSubmit(e: Event) {
+  onVerificationSubmit = async (e: Event) => {
     e.preventDefault();
-    this.setState({ loading: true });
+    this.setState({ loading: true, error: null });
     try {
       await this.props.sendEmailVerification(this.state.usernameValue, this.state.addressValue);
       this.setState({ verificationSent: true });
       setTimeout(() => {
-        this.tokenRef && this.tokenRef.focus();
+        this.tokenRef.current && this.tokenRef.current.focus();
       }, 100);
     } catch (e) {
       this.setState({ error: extractErrorMessageFromResponse(e) });
     } finally {
       this.setState({ loading: false });
     }
-  }
+  };
 
-  async onSubmit(e: Event) {
-    e.preventDefault();
+  async sendForm(token: string = this.state.tokenValue) {
     try {
       this.setState({ loading: true });
-      const user = await this.props.onSignIn(this.state.tokenValue);
+      const user = await this.props.onSignIn(token);
       if (!user) {
         this.setState({ error: 'No user was found' });
         return;
@@ -100,28 +93,51 @@ export class EmailLoginForm extends Component<Props, State> {
     }
   }
 
-  onUsernameChange(e: Event) {
+  onSubmit = async (e: Event) => {
+    e.preventDefault();
+    this.sendForm();
+  };
+
+  onUsernameChange = (e: Event) => {
     this.setState({ error: null, usernameValue: (e.target as HTMLInputElement).value });
-  }
+  };
 
-  onAddressChange(e: Event) {
+  onAddressChange = (e: Event) => {
     this.setState({ error: null, addressValue: (e.target as HTMLInputElement).value });
-  }
+  };
 
-  onTokenChange(e: Event) {
-    this.setState({ error: null, tokenValue: (e.target as HTMLInputElement).value });
-  }
+  onTokenChange = (e: Event) => {
+    const { value } = e.target as HTMLInputElement;
 
-  goBack() {
+    this.setState({ error: null, tokenValue: value });
+
+    try {
+      if (value.length > 0 && isJwtExpired(value)) {
+        this.setState({ error: 'Token is expired' });
+        return;
+      }
+      this.sendForm(value);
+    } catch (e) {}
+  };
+
+  goBack = async () => {
+    // Wait for finding back button in DOM by dropbox
+    // It prevents dropdown from closing, because if dropdown doesn't find clicked element it closes
+    await sleep(0);
+
     this.setState({
       tokenValue: '',
       error: null,
       verificationSent: false,
     });
-    setTimeout(() => {
-      this.inputRef && this.inputRef.focus();
-    }, 100);
-  }
+
+    // Wait for rendering username+email step to find user input
+    await sleep(0);
+
+    if (this.usernameInputRef.current) {
+      this.usernameInputRef.current.focus();
+    }
+  };
 
   getForm1InvalidReason(): string | null {
     if (this.state.loading) return 'Loading...';
@@ -139,13 +155,7 @@ export class EmailLoginForm extends Component<Props, State> {
     return null;
   }
 
-  componentDidMount() {
-    setTimeout(() => {
-      this.inputRef && this.inputRef.focus();
-    }, 100);
-  }
-
-  render(props: RenderableProps<Props>) {
+  render(props: Props) {
     // TODO: will be great to `b` to accept `string | undefined | (string|undefined)[]` as classname
     let className = b('auth-panel-email-login-form', {}, { theme: props.theme });
     if (props.className) {
@@ -157,43 +167,32 @@ export class EmailLoginForm extends Component<Props, State> {
     if (!this.state.verificationSent)
       return (
         <form className={className} onSubmit={this.onVerificationSubmit}>
-          {/*
-           * We adding hidden span element to bear with DropDown's onOutSideClick handler.
-           * This function checks if element that was clicked is a children of it's root component.
-           * And the problem is that by the time handler gets executed our target element is not a
-           * part of a dom, so handler suggests that we clicked somewhere outside and hides dropdown
-           */}
-          <span
-            className="auth-panel-email-login-form__back-button"
-            role="button"
-            {...getHandleClickProps(this.goBack)}
-            style={{ display: 'none' }}
-          >
-            {'< Back'}
-          </span>
-          <input
-            className="auth-panel-email-login-form__input"
-            ref={ref => (this.inputRef = ref)}
-            type="text"
+          <Input
+            autoFocus
+            mix="auth-panel-email-login-form__input"
+            ref={this.usernameInputRef}
             placeholder="Username"
             value={this.state.usernameValue}
             onInput={this.onUsernameChange}
           />
-          <input
-            className="auth-panel-email-login-form__input"
+          <Input
+            mix="auth-panel-email-login-form__input"
             type="email"
             placeholder="Email Address"
             value={this.state.addressValue}
             onInput={this.onAddressChange}
           />
-          <input
-            className="auth-panel-email-login-form__submit"
+          {this.state.error && <div className="auth-panel-email-login-form__error">{this.state.error}</div>}
+          <Button
+            mix="auth-panel-email-login-form__submit"
+            kind="primary"
+            size="middle"
             type="submit"
-            value="Send Verification"
             title={form1InvalidReason || ''}
             disabled={form1InvalidReason !== null}
-          />
-          {this.state.error && <div class="auth-panel-email-login-form__error">{this.state.error}</div>}
+          >
+            Send Verification
+          </Button>
         </form>
       );
 
@@ -201,35 +200,38 @@ export class EmailLoginForm extends Component<Props, State> {
 
     return (
       <form className={className} onSubmit={this.onSubmit}>
-        <span className="auth-panel-email-login-form__back-button" role="button" {...getHandleClickProps(this.goBack)}>
-          {'< Back'}
-        </span>
+        <Button kind="link" mix="auth-panel-email-login-form__back-button" {...getHandleClickProps(this.goBack)}>
+          Back
+        </Button>
         <TextareaAutosize
           autofocus={true}
           className="auth-panel-email-login-form__token-input"
-          ref={ref => (this.tokenRef = ref)}
+          ref={this.tokenRef}
           placeholder="Token"
           value={this.state.tokenValue}
           onInput={this.onTokenChange}
           spellcheck={false}
           autocomplete="off"
         />
-        <input
-          className="auth-panel-email-login-form__submit"
+        {this.state.error && <div className="auth-panel-email-login-form__error">{this.state.error}</div>}
+        <Button
+          mix="auth-panel-email-login-form__submit"
           type="submit"
-          value="Confirm"
+          kind="primary"
+          size="middle"
           title={form2InvalidReason || ''}
           disabled={form2InvalidReason !== null}
-        />
-        {this.state.error && <div class="auth-panel-email-login-form__error">{this.state.error}</div>}
+        >
+          Confirm
+        </Button>
       </form>
     );
   }
 }
 
-export const EmailLoginFormConnected = connect(
-  mapStateToProps,
-  null,
-  null,
-  { withRef: true }
-)(EmailLoginForm);
+export type EmailLoginFormRef = EmailLoginForm;
+
+export const EmailLoginFormConnected = forwardRef<EmailLoginForm, OwnProps>((props, ref) => {
+  const connectedProps = useSelector(mapStateToProps);
+  return <EmailLoginForm {...props} {...connectedProps} ref={ref} />;
+});

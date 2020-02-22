@@ -16,12 +16,15 @@ import { getPinnedComments } from './utils';
 import { cmpRef } from '@app/utils/cmpRef';
 
 export const topComments = (
-  state: (Comment['id'])[] = [],
+  state: Comment['id'][] = [],
   action: COMMENTS_SET_ACTION | COMMENTS_APPEND_ACTION
-): (Comment['id'])[] => {
+): Comment['id'][] => {
   switch (action.type) {
     case COMMENTS_SET: {
-      return cmpRef(state, action.comments.map(x => x.comment.id));
+      return cmpRef(
+        state,
+        action.comments.map(x => x.comment.id)
+      );
     }
     case COMMENTS_APPEND: {
       if (action.comment.pid) return state;
@@ -32,10 +35,7 @@ export const topComments = (
   }
 };
 
-const reduceChildIds = (
-  c: Record<Comment['id'], (Comment['id'])[]>,
-  x: Node
-): Record<Comment['id'], (Comment['id'])[]> => {
+const reduceChildIds = (c: Record<Comment['id'], Comment['id'][]>, x: Node): Record<Comment['id'], Comment['id'][]> => {
   if (!x.replies) return c;
   if (!c[x.comment.id]) {
     c[x.comment.id] = [];
@@ -51,12 +51,12 @@ const reduceChildIds = (
 };
 
 export const childComments = (
-  state: Record<Comment['id'], (Comment['id'])[]> = {},
+  state: Record<Comment['id'], Comment['id'][]> = {},
   action: COMMENTS_SET_ACTION | COMMENTS_APPEND_ACTION
-): Record<Comment['id'], (Comment['id'])[]> => {
+): Record<Comment['id'], Comment['id'][]> => {
   switch (action.type) {
     case COMMENTS_SET: {
-      return action.comments.reduce<Record<Comment['id'], (Comment['id'])[]>>(reduceChildIds, {});
+      return action.comments.reduce<Record<Comment['id'], Comment['id'][]>>(reduceChildIds, {});
     }
     case COMMENTS_APPEND: {
       if (!action.comment.pid) return state;
@@ -104,7 +104,7 @@ export const comments = (
       let changed = false;
       const editObject = { summary: '', time: new Date().toISOString() };
       for (const id of action.ids) {
-        if (!state.hasOwnProperty(id)) continue;
+        if (!Object.prototype.hasOwnProperty.call(state, id)) continue;
         if (!changed) {
           changed = true;
           newState = { ...newState };
@@ -134,9 +134,9 @@ export const activeComment = (
 };
 
 export const pinnedComments = (
-  state: (Comment['id'])[] = [],
+  state: Comment['id'][] = [],
   action: COMMENTS_SET_ACTION | COMMENTS_EDIT_ACTION | COMMENTS_PATCH_ACTION
-): (Comment['id'])[] => {
+): Comment['id'][] => {
   switch (action.type) {
     case COMMENTS_SET: {
       return getPinnedComments(action.comments).map(x => x.id);
@@ -153,11 +153,11 @@ export const pinnedComments = (
       return [...state, action.comment.id];
     }
     case COMMENTS_PATCH: {
-      if (!action.patch.hasOwnProperty('pin')) return state;
+      if (!Object.prototype.hasOwnProperty.call(action.patch, 'pin')) return state;
       if (!action.patch.pin) {
         return state.filter(x => action.ids.indexOf(x) === -1);
       }
-      return [...state, ...action.ids].reduce<(Comment['id'])[]>((c, x) => {
+      return [...state, ...action.ids].reduce<Comment['id'][]>((c, x) => {
         if (c.indexOf(x) === -1) {
           c.push(x);
         }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,9 +18,9 @@ import (
 	"github.com/go-chi/cors"
 	"github.com/go-chi/render"
 	"github.com/go-pkgz/auth"
+	"github.com/go-pkgz/lcw"
 	log "github.com/go-pkgz/lgr"
 	R "github.com/go-pkgz/rest"
-	"github.com/go-pkgz/rest/cache"
 	"github.com/go-pkgz/rest/logger"
 	"github.com/pkg/errors"
 	"github.com/rakyll/statik/fs"
@@ -38,7 +39,7 @@ type Rest struct {
 
 	DataService      *service.DataStore
 	Authenticator    *auth.Service
-	Cache            cache.LoadingCache
+	Cache            LoadingCache
 	ImageProxy       *proxy.Image
 	CommentFormatter *store.CommentFormatter
 	Migrator         *Migrator
@@ -46,6 +47,7 @@ type Rest struct {
 	ImageService     *image.Service
 	Streamer         *Streamer
 
+	AnonVote        bool
 	WebRoot         string
 	RemarkURL       string
 	ReadOnlyAge     int
@@ -54,8 +56,10 @@ type Rest struct {
 		Low      int
 		Critical int
 	}
-	UpdateLimiter float64
-	EmojiEnabled  bool
+	UpdateLimiter      float64
+	EmailNotifications bool
+	EmojiEnabled       bool
+	SimpleView         bool
 
 	SSLConfig   SSLConfig
 	httpsServer *http.Server
@@ -66,6 +70,12 @@ type Rest struct {
 	privRest  private
 	adminRest admin
 	rssRest   rss
+}
+
+// LoadingCache defines interface for caching
+type LoadingCache interface {
+	Get(key lcw.Key, fn func() ([]byte, error)) (data []byte, err error) // load from cache if found or put to cache and return
+	Flush(req lcw.FlusherRequest)                                        // evict matched records
 }
 
 const hardBodyLimit = 1024 * 64 // limit size of body
@@ -285,7 +295,8 @@ func (s *Rest) routes() chi.Router {
 			radmin.Get("/export", s.adminRest.migrator.exportCtrl)
 			radmin.Post("/import", s.adminRest.migrator.importCtrl)
 			radmin.Post("/import/form", s.adminRest.migrator.importFormCtrl)
-			radmin.Get("/import/wait", s.adminRest.migrator.importWaitCtrl)
+			radmin.Post("/remap", s.adminRest.migrator.remapCtrl)
+			radmin.Get("/wait", s.adminRest.migrator.waitCtrl)
 		})
 
 		// protected routes, throttled to 10/s by default, controlled by external UpdateLimiter param
@@ -298,8 +309,12 @@ func (s *Rest) routes() chi.Router {
 
 			rauth.Put("/comment/{id}", s.privRest.updateCommentCtrl)
 			rauth.Post("/comment", s.privRest.createCommentCtrl)
-			rauth.With(rejectAnonUser).Put("/vote/{id}", s.privRest.voteCtrl)
+			rauth.Put("/vote/{id}", s.privRest.voteCtrl)
 			rauth.With(rejectAnonUser).Post("/deleteme", s.privRest.deleteMeCtrl)
+			rauth.With(rejectAnonUser).Get("/email", s.privRest.getEmailCtrl)
+			rauth.With(rejectAnonUser).Post("/email/subscribe", s.privRest.sendEmailConfirmationCtrl)
+			rauth.With(rejectAnonUser).Post("/email/confirm", s.privRest.setConfirmedEmailCtrl)
+			rauth.With(rejectAnonUser).Delete("/email", s.privRest.deleteEmailCtrl)
 		})
 
 		// protected routes, anonymous rejected
@@ -319,10 +334,12 @@ func (s *Rest) routes() chi.Router {
 		rroot.Use(tollbooth_chi.LimitHandler(tollbooth.NewLimiter(50, nil)))
 		rroot.Get("/index.html", s.pubRest.getStartedCtrl)
 		rroot.Get("/robots.txt", s.pubRest.robotsCtrl)
+		rroot.Get("/email/unsubscribe.html", s.privRest.emailUnsubscribeCtrl)
+		rroot.Post("/email/unsubscribe.html", s.privRest.emailUnsubscribeCtrl)
 	})
 
 	// file server for static content from /web
-	addFileServer(router, "/web", http.Dir(s.WebRoot))
+	addFileServer(router, "/web", http.Dir(s.WebRoot), s.Version)
 	return router
 }
 
@@ -347,6 +364,7 @@ func (s *Rest) controllerGroups() (public, private, admin, rss) {
 		authenticator:    s.Authenticator,
 		notifyService:    s.NotifyService,
 		remarkURL:        s.RemarkURL,
+		anonVote:         s.AnonVote,
 	}
 
 	admGrp := admin{
@@ -382,30 +400,36 @@ func (s *Rest) configCtrl(w http.ResponseWriter, r *http.Request) {
 	emails, _ := s.DataService.AdminStore.Email(siteID)
 
 	cnf := struct {
-		Version        string   `json:"version"`
-		EditDuration   int      `json:"edit_duration"`
-		MaxCommentSize int      `json:"max_comment_size"`
-		Admins         []string `json:"admins"`
-		AdminEmail     string   `json:"admin_email"`
-		Auth           []string `json:"auth_providers"`
-		LowScore       int      `json:"low_score"`
-		CriticalScore  int      `json:"critical_score"`
-		PositiveScore  bool     `json:"positive_score"`
-		ReadOnlyAge    int      `json:"readonly_age"`
-		MaxImageSize   int      `json:"max_image_size"`
-		EmojiEnabled   bool     `json:"emoji_enabled"`
+		Version            string   `json:"version"`
+		EditDuration       int      `json:"edit_duration"`
+		MaxCommentSize     int      `json:"max_comment_size"`
+		Admins             []string `json:"admins"`
+		AdminEmail         string   `json:"admin_email"`
+		Auth               []string `json:"auth_providers"`
+		AnonVote           bool     `json:"anon_vote"`
+		LowScore           int      `json:"low_score"`
+		CriticalScore      int      `json:"critical_score"`
+		PositiveScore      bool     `json:"positive_score"`
+		ReadOnlyAge        int      `json:"readonly_age"`
+		MaxImageSize       int      `json:"max_image_size"`
+		EmailNotifications bool     `json:"email_notifications"`
+		EmojiEnabled       bool     `json:"emoji_enabled"`
+		SimpleView         bool     `json:"simple_view"`
 	}{
-		Version:        s.Version,
-		EditDuration:   int(s.DataService.EditDuration.Seconds()),
-		MaxCommentSize: s.DataService.MaxCommentSize,
-		Admins:         admins,
-		AdminEmail:     emails,
-		LowScore:       s.ScoreThresholds.Low,
-		CriticalScore:  s.ScoreThresholds.Critical,
-		PositiveScore:  s.DataService.PositiveScore,
-		ReadOnlyAge:    s.ReadOnlyAge,
-		MaxImageSize:   s.ImageService.Store.SizeLimit(),
-		EmojiEnabled:   s.EmojiEnabled,
+		Version:            s.Version,
+		EditDuration:       int(s.DataService.EditDuration.Seconds()),
+		MaxCommentSize:     s.DataService.MaxCommentSize,
+		Admins:             admins,
+		AdminEmail:         emails,
+		LowScore:           s.ScoreThresholds.Low,
+		CriticalScore:      s.ScoreThresholds.Critical,
+		PositiveScore:      s.DataService.PositiveScore,
+		ReadOnlyAge:        s.ReadOnlyAge,
+		MaxImageSize:       s.ImageService.Store.SizeLimit(),
+		EmailNotifications: s.EmailNotifications,
+		EmojiEnabled:       s.EmojiEnabled,
+		AnonVote:           s.AnonVote,
+		SimpleView:         s.SimpleView,
 	}
 
 	cnf.Auth = []string{}
@@ -421,7 +445,7 @@ func (s *Rest) configCtrl(w http.ResponseWriter, r *http.Request) {
 }
 
 // serves static files from /web or embedded by statik
-func addFileServer(r chi.Router, path string, root http.FileSystem) {
+func addFileServer(r chi.Router, path string, root http.FileSystem, version string) {
 
 	var webFS http.Handler
 
@@ -443,15 +467,17 @@ func addFileServer(r chi.Router, path string, root http.FileSystem) {
 	}
 	path += "*"
 
-	r.With(tollbooth_chi.LimitHandler(tollbooth.NewLimiter(20, nil)), middleware.Timeout(10*time.Second)).
-		Get(path, func(w http.ResponseWriter, r *http.Request) {
-			// don't show dirs, just serve files
-			if strings.HasSuffix(r.URL.Path, "/") && len(r.URL.Path) > 1 && r.URL.Path != (origPath+"/") {
-				http.NotFound(w, r)
-				return
-			}
-			webFS.ServeHTTP(w, r)
-		})
+	r.With(tollbooth_chi.LimitHandler(tollbooth.NewLimiter(20, nil)),
+		middleware.Timeout(10*time.Second),
+		cacheControl(time.Hour, version),
+	).Get(path, func(w http.ResponseWriter, r *http.Request) {
+		// don't show dirs, just serve files
+		if strings.HasSuffix(r.URL.Path, "/") && len(r.URL.Path) > 1 && r.URL.Path != (origPath+"/") {
+			http.NotFound(w, r)
+			return
+		}
+		webFS.ServeHTTP(w, r)
+	})
 }
 
 func encodeJSONWithHTML(v interface{}) ([]byte, error) {
@@ -541,6 +567,32 @@ func matchSiteID(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	}
 	return http.HandlerFunc(fn)
+}
+
+// cacheControl is a middleware setting cache expiration. Using url+version as etag
+func cacheControl(expiration time.Duration, version string) func(http.Handler) http.Handler {
+
+	etag := func(r *http.Request, version string) string {
+		s := version + ":" + r.URL.String()
+		return store.EncodeID(s)
+	}
+
+	return func(h http.Handler) http.Handler {
+		fn := func(w http.ResponseWriter, r *http.Request) {
+			e := `"` + etag(r, version) + `"`
+			w.Header().Set("Etag", e)
+			w.Header().Set("Cache-Control", "max-age="+strconv.Itoa(int(expiration.Seconds())))
+
+			if match := r.Header.Get("If-None-Match"); match != "" {
+				if strings.Contains(match, e) {
+					w.WriteHeader(http.StatusNotModified)
+					return
+				}
+			}
+			h.ServeHTTP(w, r)
+		}
+		return http.HandlerFunc(fn)
+	}
 }
 
 func parseError(err error, defaultCode int) (code int) {

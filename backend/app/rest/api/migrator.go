@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/go-chi/render"
+	cache "github.com/go-pkgz/lcw"
 	log "github.com/go-pkgz/lgr"
 	R "github.com/go-pkgz/rest"
-	"github.com/go-pkgz/rest/cache"
 	"github.com/pkg/errors"
 
 	"github.com/umputun/remark/backend/app/migrator"
@@ -23,11 +23,12 @@ import (
 
 // Migrator rest with import and export controllers
 type Migrator struct {
-	Cache             cache.LoadingCache
+	Cache             LoadingCache
 	NativeImporter    migrator.Importer
 	DisqusImporter    migrator.Importer
 	WordPressImporter migrator.Importer
 	NativeExporter    migrator.Exporter
+	UrlMapperMaker    migrator.MapperMaker
 	KeyStore          KeyStore
 
 	busy map[string]bool
@@ -98,7 +99,9 @@ func (m *Migrator) importFormCtrl(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, r, R.JSON{"status": "import request accepted"})
 }
 
-func (m *Migrator) importWaitCtrl(w http.ResponseWriter, r *http.Request) {
+// GET /wait?site=site-id
+// waits for migration operation (import or remap)
+func (m *Migrator) waitCtrl(w http.ResponseWriter, r *http.Request) {
 	siteID := r.URL.Query().Get("site")
 	timeOut := time.Minute * 15
 	if v := r.URL.Query().Get("timeout"); v != "" {
@@ -152,6 +155,62 @@ func (m *Migrator) exportCtrl(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// POST /remap?site=site-id
+// remap urls in comments based on given rules (oldUrl newUrl)
+func (m *Migrator) remapCtrl(w http.ResponseWriter, r *http.Request) {
+	siteID := r.URL.Query().Get("site")
+
+	// create new url-mapper from given rules in body
+	mapper, err := m.UrlMapperMaker(r.Body)
+	if err != nil {
+		rest.SendErrorJSON(w, r, http.StatusBadRequest, err, "remap failed, bad given rules", rest.ErrDecode)
+		return
+	}
+	defer r.Body.Close()
+
+	// start remap procedure with mapper
+	go func() {
+		m.setBusy(siteID, true)
+		defer m.setBusy(siteID, false)
+
+		// do export
+		fh, e := ioutil.TempFile("", "remark42_convert")
+		if e != nil {
+			log.Printf("[WARN] failed to make temp file %+v", e)
+			return
+		}
+		defer func() {
+			if e := os.Remove(fh.Name()); e != nil {
+				log.Printf("[WARN] failed to remove temp file %+v", e)
+			}
+		}()
+		log.Printf("[DEBUG] start export for site=%s", siteID)
+		if _, e := m.NativeExporter.Export(fh, siteID); e != nil {
+			log.Printf("[WARN] export failed with %+v", e)
+			return
+		}
+
+		if _, e = fh.Seek(0, 0); e != nil {
+			log.Printf("[WARN] failed to seek file %+v", e)
+			return
+		}
+
+		log.Printf("[DEBUG] start import for site=%s", siteID)
+		mappedReader := migrator.WithMapper(fh, mapper)
+		size, e := m.NativeImporter.Import(mappedReader, siteID)
+		if e != nil {
+			log.Printf("[WARN] import failed with %+v", e)
+			return
+		}
+
+		m.Cache.Flush(cache.Flusher(siteID).Scopes(siteID))
+		log.Printf("[DEBUG] convert request completed. site=%s, comments=%d", siteID, size)
+	}()
+
+	render.Status(r, http.StatusAccepted)
+	render.JSON(w, r, R.JSON{"status": "convert request accepted"})
+}
+
 // runImport reads from tmpfile and import for given siteID and provider
 func (m *Migrator) runImport(siteID string, provider string, tmpfile string) {
 	m.setBusy(siteID, true)
@@ -174,7 +233,7 @@ func (m *Migrator) runImport(siteID string, provider string, tmpfile string) {
 	}
 	log.Printf("[DEBUG] import request for site=%s, provider=%s", siteID, provider)
 
-	fh, err := os.Open(tmpfile)
+	fh, err := os.Open(tmpfile) // nolint
 	if err != nil {
 		log.Printf("[WARN] import failed, %v", err)
 		return

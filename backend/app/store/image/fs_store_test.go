@@ -47,7 +47,6 @@ func TestFsStore_Save(t *testing.T) {
 	id, err := svc.Save("file1.png", "user1", gopherPNG())
 	assert.NoError(t, err)
 	assert.Contains(t, id, "user1/")
-	assert.Contains(t, id, ".png")
 	t.Log(id)
 
 	img := svc.location(svc.Staging, id)
@@ -65,14 +64,13 @@ func TestFsStore_SaveWithResize(t *testing.T) {
 	id, err := svc.Save("file1.png", "user1", gopherPNG())
 	assert.NoError(t, err)
 	assert.Contains(t, id, "user1/")
-	assert.Contains(t, id, ".png")
 	t.Log(id)
 
 	img := svc.location(svc.Staging, id)
 	t.Log(img)
 	data, err := ioutil.ReadFile(img)
 	assert.NoError(t, err)
-	assert.Equal(t, 1142, len(data))
+	assert.Equal(t, 1135, len(data))
 }
 
 func TestFsStore_SaveWithResizeJpeg(t *testing.T) {
@@ -87,14 +85,13 @@ func TestFsStore_SaveWithResizeJpeg(t *testing.T) {
 	id, err := svc.Save("circles.jpg", "user1", fh)
 	assert.NoError(t, err)
 	assert.Contains(t, id, "user1/")
-	assert.Contains(t, id, ".png")
 	t.Log(id)
 
 	img := svc.location(svc.Staging, id)
 	t.Log(img)
 	data, err := ioutil.ReadFile(img)
 	assert.NoError(t, err)
-	assert.Equal(t, 10786, len(data))
+	assert.Equal(t, 10918, len(data))
 }
 
 func TestFsStore_SaveNoResizeJpeg(t *testing.T) {
@@ -109,7 +106,6 @@ func TestFsStore_SaveNoResizeJpeg(t *testing.T) {
 	id, err := svc.Save("circles.jpg", "user1", fh)
 	assert.NoError(t, err)
 	assert.Contains(t, id, "user1/")
-	assert.Contains(t, id, ".jpg")
 	t.Log(id)
 
 	img := svc.location(svc.Staging, id)
@@ -124,7 +120,7 @@ func TestFsStore_WrongFormat(t *testing.T) {
 	defer teardown()
 
 	_, err := svc.Save("file1.png", "user1", strings.NewReader("blah blah bad image"))
-	assert.EqualError(t, err, "file file1.png is not in allowed format")
+	assert.Error(t, err)
 }
 
 func TestFsStore_SaveAndCommit(t *testing.T) {
@@ -133,12 +129,12 @@ func TestFsStore_SaveAndCommit(t *testing.T) {
 
 	id, err := svc.Save("file1.png", "user1", gopherPNG())
 	require.NoError(t, err)
-	err = svc.Commit(id)
+	err = svc.commit(id)
 	require.NoError(t, err)
 
 	imgStaging := svc.location(svc.Staging, id)
 	_, err = os.Stat(imgStaging)
-	assert.NotNil(t, err, "no file on staging anymore")
+	assert.Error(t, err, "no file on staging anymore")
 
 	img := svc.location(svc.Location, id)
 	t.Log(img)
@@ -173,7 +169,7 @@ func TestFsStore_LoadAfterSave(t *testing.T) {
 	assert.Equal(t, 1462, len(data))
 	assert.Equal(t, int64(1462), sz)
 	_, _, err = svc.Load("abcd")
-	assert.NotNil(t, err)
+	assert.Error(t, err)
 }
 
 func TestFsStore_LoadAfterCommit(t *testing.T) {
@@ -184,7 +180,7 @@ func TestFsStore_LoadAfterCommit(t *testing.T) {
 	id, err := svc.Save("blah_ff1.png", "user1", gopherPNG())
 	assert.NoError(t, err)
 	t.Log(id)
-	err = svc.Commit(id)
+	err = svc.commit(id)
 	require.NoError(t, err)
 
 	r, sz, err := svc.Load(id)
@@ -195,7 +191,7 @@ func TestFsStore_LoadAfterCommit(t *testing.T) {
 	assert.Equal(t, 1462, len(data))
 	assert.Equal(t, int64(1462), sz)
 	_, _, err = svc.Load("abcd")
-	assert.NotNil(t, err)
+	assert.Error(t, err)
 }
 
 func TestFsStore_location(t *testing.T) {
@@ -263,14 +259,20 @@ func TestFsStore_Cleanup(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	img3 := save("blah_ff3.png", "user2")
 
-	time.Sleep(100 * time.Millisecond) // make first image expired
-	err := svc.Cleanup(context.Background(), time.Millisecond*300)
+	time.Sleep(200 * time.Millisecond) // make first image expired
+	err := svc.cleanup(context.Background(), time.Millisecond*300)
 	assert.NoError(t, err)
 
 	_, err = os.Stat(img1)
-	assert.NotNil(t, err, "no file on staging anymore")
+	assert.Error(t, err, "no file on staging anymore")
+	// sometimes two images for user1 are put into same directory, which means that
+	// after first image cleanup it's not empty and won't be deleted
 	_, err = os.Stat(path.Dir(img1))
-	assert.NotNil(t, err, "no dir %s on staging anymore", path.Dir(img1))
+	if path.Dir(img1) != path.Dir(img2) {
+		assert.Error(t, err, "no dir %s on staging anymore", path.Dir(img1))
+	} else {
+		assert.NoError(t, err, "dir %s still on staging", path.Dir(img1))
+	}
 
 	_, err = os.Stat(img2)
 	assert.NoError(t, err, "file on staging")
@@ -278,13 +280,13 @@ func TestFsStore_Cleanup(t *testing.T) {
 	assert.NoError(t, err, "file on staging")
 
 	time.Sleep(200 * time.Millisecond) // make all images expired
-	err = svc.Cleanup(context.Background(), time.Millisecond*300)
+	err = svc.cleanup(context.Background(), time.Millisecond*300)
 	assert.NoError(t, err)
 
 	_, err = os.Stat(img2)
-	assert.NotNil(t, err, "no file on staging anymore")
+	assert.Error(t, err, "no file on staging anymore")
 	_, err = os.Stat(img3)
-	assert.NotNil(t, err, "no file on staging anymore")
+	assert.Error(t, err, "no file on staging anymore")
 }
 
 func prepareImageTest(t *testing.T) (svc *FileSystem, teardown func()) {

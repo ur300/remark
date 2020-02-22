@@ -36,47 +36,41 @@ type FileSystem struct {
 	}
 }
 
-// Save data from reader for given file name to local FS, staging directory. Returns id as user/uuid.ext
-// Files partitioned across multiple subdirectories and the final path includes part, i.e. /location/user1/03/123-4567.png
-func (f *FileSystem) Save(fileName string, userID string, r io.Reader) (id string, err error) {
-
-	lr := io.LimitReader(r, int64(f.MaxSize)+1)
-	data, err := ioutil.ReadAll(lr)
+// SaveWithID saves data from a reader, with given id
+func (f *FileSystem) SaveWithID(id string, r io.Reader) (string, error) {
+	data, err := readAndValidateImage(r, f.MaxSize)
 	if err != nil {
-		return "", errors.Wrapf(err, "can't read source data for image %s", fileName)
-	}
-	if len(data) > f.MaxSize {
-		return "", errors.Errorf("file %s is too large (limit=%d)", fileName, f.MaxSize)
+		return "", errors.Wrapf(err, "can't load image with ID %s", id)
 	}
 
-	// read header first, needs it to check if data is valid png/gif/jpeg
-	if !isValidImage(data[:512]) {
-		return "", errors.Errorf("file %s is not in allowed format", fileName)
-	}
-
-	data, resized := resize(data, f.MaxWidth, f.MaxHeight)
-
-	id = path.Join(userID, guid()) + filepath.Ext(fileName) // make id as user/uuid.ext
+	data = resize(data, f.MaxWidth, f.MaxHeight)
 	dst := f.location(f.Staging, id)
-	if resized { // resized also converted to png
-		id = strings.TrimSuffix(id, filepath.Ext(id)) + ".png"
-		dst = f.location(f.Staging, id)
-	}
 
 	if err = os.MkdirAll(path.Dir(dst), 0700); err != nil {
 		return "", errors.Wrap(err, "can't make image directory")
 	}
 
 	if err = ioutil.WriteFile(dst, data, 0600); err != nil {
-		return "", errors.Wrapf(err, "can't write image file %s", dst)
+		return "", errors.Wrapf(err, "can't write image file with id %s", id)
 	}
 
-	log.Printf("[DEBUG] file %s saved for image %s, size=%d", dst, fileName, len(data))
+	log.Printf("[DEBUG] file %s saved for image %s, size=%d", dst, id, len(data))
 	return id, nil
 }
 
+// Save data from a reader for given file name to local FS, staging directory. Returns id as user/uuid
+// Files partitioned across multiple subdirectories, and the final path includes part, i.e. /location/user1/03/123-4567
+func (f *FileSystem) Save(fileName string, userID string, r io.Reader) (id string, err error) {
+	tempId := path.Join(userID, guid()) // make id as user/uuid
+	id, err = f.SaveWithID(tempId, r)
+	if err != nil {
+		err = errors.Wrapf(err, "can't save image file %s", fileName)
+	}
+	return id, err
+}
+
 // Commit file stored in staging location by moving it to permanent location
-func (f *FileSystem) Commit(id string) error {
+func (f *FileSystem) commit(id string) error {
 	log.Printf("[DEBUG] commit image %s", id)
 	stagingImage, permImage := f.location(f.Staging, id), f.location(f.Location, id)
 
@@ -108,7 +102,7 @@ func (f *FileSystem) Load(id string) (io.ReadCloser, int64, error) {
 		return nil, 0, errors.Wrapf(err, "can't get image file for %s", id)
 	}
 
-	fh, err := os.Open(imgFile)
+	fh, err := os.Open(imgFile) // nolint
 	if err != nil {
 		return nil, 0, errors.Wrapf(err, "can't load image %s", id)
 	}
@@ -116,12 +110,13 @@ func (f *FileSystem) Load(id string) (io.ReadCloser, int64, error) {
 }
 
 // Cleanup runs scan of staging and removes old files based on ttl
-func (f *FileSystem) Cleanup(ctx context.Context, ttl time.Duration) error {
+func (f *FileSystem) cleanup(_ context.Context, ttl time.Duration) error {
 
 	if _, err := os.Stat(f.Staging); os.IsNotExist(err) {
 		return nil
 	}
 
+	// we can ignore context as on local FS remove is relatively fast operation
 	err := filepath.Walk(f.Staging, func(fpath string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -130,7 +125,7 @@ func (f *FileSystem) Cleanup(ctx context.Context, ttl time.Duration) error {
 			return nil
 		}
 		age := time.Since(info.ModTime())
-		if age > ttl {
+		if age > (ttl + 100*time.Millisecond) { // delay cleanup triggering to allow commit
 			log.Printf("[INFO] remove staging image %s, age %v", fpath, age)
 			rmErr := os.Remove(fpath)
 			_ = os.Remove(path.Dir(fpath)) // try to remove directory

@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-		"incremental": true,
+    "incremental": true,
     "lib": ["es2017", "dom"],
     "target": "es2017",
     "jsx": "react",
@@ -23,5 +23,5 @@
     }
   },
   "include": ["app/**/*"],
-  "exclude": ["node_modules"],
+  "exclude": ["node_modules"]
 }

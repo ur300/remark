@@ -51,14 +51,15 @@ type DataStore struct {
 	}
 }
 
-// UserMetaData keeps info about user flags
+// UserMetaData keeps info about user flags and details
 type UserMetaData struct {
 	ID      string `json:"id"`
 	Blocked struct {
 		Status bool      `json:"status"`
 		Until  time.Time `json:"until"`
 	} `json:"blocked"`
-	Verified bool `json:"verified"`
+	Verified bool                   `json:"verified"`
+	Details  engine.UserDetailEntry `json:"details,omitempty"`
 }
 
 // PostMetaData keeps info about post flags
@@ -101,7 +102,7 @@ func (s *DataStore) Create(comment store.Comment) (commentID string, err error) 
 		comment.PostTitle = title
 	}()
 
-	s.submitImages(comment)
+	s.submitImages(comment.Locator, comment.ID)
 	if e := s.AdminStore.OnEvent(comment.Locator.SiteID, admin.EvCreate); e != nil {
 		log.Printf("[WARN] failed to send create event, %s", e)
 	}
@@ -158,24 +159,65 @@ func (s *DataStore) Put(locator store.Locator, comment store.Comment) error {
 	return s.Engine.Update(comment)
 }
 
-// submitImages initiated delayed commit of all images from the comment uploaded to remark42
-func (s *DataStore) submitImages(comment store.Comment) {
+// GetUserEmail gets user email
+func (s *DataStore) GetUserEmail(siteID string, userID string) (string, error) {
+	res, err := s.Engine.UserDetail(engine.UserDetailRequest{
+		Detail:  engine.UserEmail,
+		Locator: store.Locator{SiteID: siteID},
+		UserID:  userID,
+	})
+	if err != nil {
+		return "", err
+	}
+	if len(res) == 1 {
+		return res[0].Email, nil
+	}
+	return "", nil
+}
 
-	s.ImageService.Submit(func() []string {
-		c := comment
+// SetUserEmail sets user email
+func (s *DataStore) SetUserEmail(siteID string, userID string, value string) (string, error) {
+	res, err := s.Engine.UserDetail(engine.UserDetailRequest{
+		Detail:  engine.UserEmail,
+		Locator: store.Locator{SiteID: siteID},
+		UserID:  userID,
+		Update:  value,
+	})
+	if err != nil {
+		return "", err
+	}
+	if len(res) == 1 {
+		return res[0].Email, nil
+	}
+	return "", nil
+}
+
+// DeleteUserDetail deletes user detail
+func (s *DataStore) DeleteUserDetail(siteID string, userID string, detail engine.UserDetail) error {
+	return s.Engine.Delete(engine.DeleteRequest{
+		Locator:    store.Locator{SiteID: siteID},
+		UserID:     userID,
+		UserDetail: detail,
+	})
+}
+
+// submitImages initiated delayed commit of all images from the comment uploaded to remark42
+func (s *DataStore) submitImages(locator store.Locator, commentID string) {
+
+	s.ImageService.Submit(func() []string { // get all ids from comment's text
 		// this can be called after last edit, we have to retrieve fresh comment
-		cc, err := s.Engine.Get(engine.GetRequest{Locator: c.Locator, CommentID: c.ID})
+		cc, err := s.Engine.Get(engine.GetRequest{Locator: locator, CommentID: commentID})
 		if err != nil {
-			log.Printf("[WARN] can't get comment's %s text for image extraction, %v", c.ID, err)
+			log.Printf("[WARN] can't get comment's %s text for image extraction, %v", commentID, err)
 			return nil
 		}
 		imgIds, err := s.ImageService.ExtractPictures(cc.Text)
 		if err != nil {
-			log.Printf("[WARN] can't get extract pictures from %s, %v", c.ID, err)
+			log.Printf("[WARN] can't get extract pictures from %s, %v", commentID, err)
 			return nil
 		}
 		if len(imgIds) > 0 {
-			log.Printf("[DEBUG] image ids extracted from %s - %+v", c.ID, imgIds)
+			log.Printf("[DEBUG] image ids extracted from %s - %+v", commentID, imgIds)
 		}
 		return imgIds
 	})
@@ -665,7 +707,7 @@ func (s *DataStore) Metas(siteID string) (umetas []UserMetaData, pmetas []PostMe
 		}
 	}
 
-	// set users meta
+	// set users meta, key is userID
 	m := map[string]UserMetaData{}
 
 	// process blocked users
@@ -698,6 +740,20 @@ func (s *DataStore) Metas(siteID string) (umetas []UserMetaData, pmetas []PostMe
 		m[v] = val
 	}
 
+	// process users details
+	usersDetails, err := s.Engine.UserDetail(engine.UserDetailRequest{Locator: store.Locator{SiteID: siteID}, Detail: engine.AllUserDetails})
+	if err != nil {
+		return nil, nil, errors.Wrapf(err, "can't get user details for %s", siteID)
+	}
+	for _, entry := range usersDetails {
+		val, ok := m[entry.UserID]
+		if !ok {
+			val = UserMetaData{ID: entry.UserID}
+		}
+		val.Details = entry
+		m[entry.UserID] = val
+	}
+
 	for _, u := range m {
 		umetas = append(umetas, u)
 	}
@@ -725,6 +781,12 @@ func (s *DataStore) SetMetas(siteID string, umetas []UserMetaData, pmetas []Post
 		if um.Verified {
 			errs = multierror.Append(errs, s.SetVerified(siteID, um.ID, true))
 		}
+		// this code doesn't delete user details in case they are not set in import but present in DB already
+		if um.Details.Email != "" {
+			req := engine.UserDetailRequest{Locator: store.Locator{SiteID: siteID}, UserID: um.ID, Detail: engine.UserEmail, Update: um.Details.Email}
+			_, err := s.Engine.UserDetail(req)
+			errs = multierror.Append(errs, err)
+		}
 	}
 
 	return errs.ErrorOrNil()
@@ -732,7 +794,8 @@ func (s *DataStore) SetMetas(siteID string, umetas []UserMetaData, pmetas []Post
 
 // User gets comment for given userID on siteID
 func (s *DataStore) User(siteID, userID string, limit, skip int, user store.User) ([]store.Comment, error) {
-	req := engine.FindRequest{Locator: store.Locator{SiteID: siteID}, UserID: userID, Limit: limit, Skip: skip}
+	req := engine.FindRequest{Locator: store.Locator{SiteID: siteID}, UserID: userID,
+		Limit: limit, Skip: skip, Sort: "-time"}
 	comments, err := s.Engine.Find(req)
 	if err != nil {
 		return comments, err

@@ -18,7 +18,7 @@ import (
 // ImportCommand set of flags and command for import
 type ImportCommand struct {
 	InputFile   string        `short:"f" long:"file" description:"input file name" required:"true"`
-	Provider    string        `short:"p" long:"provider" default:"disqus" choice:"disqus" choice:"wordpress" description:"import format"`
+	Provider    string        `short:"p" long:"provider" default:"disqus" choice:"disqus" choice:"wordpress" description:"import format"` //nolint
 	Site        string        `short:"s" long:"site" env:"SITE" default:"remark" description:"site name"`
 	Timeout     time.Duration `long:"timeout" default:"15m" description:"import timeout"`
 	AdminPasswd string        `long:"admin-passwd" env:"ADMIN_PASSWD" required:"true" description:"admin basic auth password"`
@@ -69,7 +69,7 @@ func (ic *ImportCommand) Execute(args []string) error {
 
 // reader returns reader for file. For .gz file wraps with gunzip
 func (ic *ImportCommand) reader(inp string) (reader io.Reader, err error) {
-	inpFile, err := os.Open(inp)
+	inpFile, err := os.Open(inp) // nolint
 	if err != nil {
 		return nil, errors.Wrapf(err, "import failed, can't open %s", inp)
 	}

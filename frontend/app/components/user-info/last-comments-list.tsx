@@ -1,10 +1,10 @@
-/** @jsx h */
-import { h } from 'preact';
+/** @jsx createElement */
+import { createElement } from 'preact';
 
 import { Comment as CommentType } from '@app/common/types';
 
-import { Comment } from '../comment';
-import Preloader from '../preloader';
+import { Comment } from '@app/components/comment';
+import { Preloader } from '@app/components/preloader';
 
 const LastCommentsList = ({ comments, isLoading }: { comments: CommentType[]; isLoading: boolean }) => {
   if (isLoading) {

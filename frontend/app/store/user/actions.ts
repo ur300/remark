@@ -11,6 +11,7 @@ import {
   USER_HIDELIST_SET,
   USER_HIDE,
   USER_UNHIDE,
+  USER_SUBSCRIPTION_SET,
   SETTINGS_VISIBLE_SET,
 } from './types';
 import { unsetCommentMode } from '../comments/actions';
@@ -117,7 +118,7 @@ export const hideUser = (user: User): StoreAction<void> => (dispatch, getState) 
 export const unhideUser = (userId: string): StoreAction<void> => (dispatch, _getState) => {
   if (IS_STORAGE_AVAILABLE) {
     const hiddenUsers = JSON.parse(getItem(LS_HIDDEN_USERS_KEY) || '{}');
-    if (hiddenUsers.hasOwnProperty(userId)) {
+    if (Object.prototype.hasOwnProperty.call(hiddenUsers, userId)) {
       delete hiddenUsers[userId];
     }
     localStorage.setItem(LS_HIDDEN_USERS_KEY, JSON.stringify(hiddenUsers));
@@ -155,3 +156,8 @@ export const setSettingsVisibility = (state: boolean): StoreAction<boolean> => d
   });
   return state;
 };
+
+export const setUserSubscribed = (isSubscribed: boolean) => ({
+  type: USER_SUBSCRIPTION_SET,
+  payload: isSubscribed,
+});

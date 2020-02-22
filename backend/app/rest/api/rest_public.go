@@ -13,9 +13,9 @@ import (
 
 	"github.com/go-chi/chi"
 	"github.com/go-chi/render"
+	cache "github.com/go-pkgz/lcw"
 	log "github.com/go-pkgz/lgr"
 	R "github.com/go-pkgz/rest"
-	"github.com/go-pkgz/rest/cache"
 	"github.com/pkg/errors"
 
 	"github.com/umputun/remark/backend/app/rest"
@@ -26,7 +26,7 @@ import (
 
 type public struct {
 	dataService      pubStore
-	cache            cache.LoadingCache
+	cache            LoadingCache
 	readOnlyAge      int
 	commentFormatter *store.CommentFormatter
 	imageService     *image.Service
@@ -478,7 +478,7 @@ func (s *public) getStartedCtrl(w http.ResponseWriter, r *http.Request) {
 
 // GET /robots.txt
 func (s *public) robotsCtrl(w http.ResponseWriter, r *http.Request) {
-	allowed := []string{"/find", "/last", "/id", "/count", "/counts", "/list", "/config",
+	allowed := []string{"/find", "/last", "/id", "/count", "/counts", "/list", "/config", "/user",
 		"/img", "/avatar", "/picture"}
 	for i := range allowed {
 		allowed[i] = "Allow: /api/v1" + allowed[i]

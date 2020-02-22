@@ -1,8 +1,8 @@
-/** @jsx h */
+/** @jsx createElement */
 
 import './styles';
 
-import { h, Component, RenderableProps } from 'preact';
+import { createElement, JSX, Component, createRef } from 'preact';
 import b from 'bem-react-helper';
 
 import { getHandleClickProps } from '@app/common/accessibility';
@@ -15,11 +15,13 @@ import { Theme, BlockTTL, Comment as CommentType, PostInfo, User, CommentMode } 
 import { extractErrorMessageFromResponse, FetcherError } from '@app/utils/errorUtils';
 import { isUserAnonymous } from '@app/utils/isUserAnonymous';
 
-import { Input } from '@app/components/input';
+import { CommentForm } from '@app/components/comment-form';
 import { AvatarIcon } from '@app/components/avatar-icon';
-import Countdown from '../countdown';
+import { Button } from '@app/components/button';
+import Countdown from '@app/components/countdown';
 import { boundActions } from './connected-comment';
 import { getPreview, uploadImage } from '@app/common/api';
+import postMessage from '@app/utils/postMessage';
 
 export type Props = {
   user: User | null;
@@ -50,6 +52,7 @@ export type Props = {
 } & Partial<typeof boundActions>;
 
 export interface State {
+  renderDummy: boolean;
   isCopied: boolean;
   editDeadline: Date | null;
   voteErrorMessage: string | null;
@@ -71,23 +74,23 @@ export interface State {
 export class Comment extends Component<Props, State> {
   votingPromise: Promise<unknown>;
   /** comment text node. Used in comment text copying */
-  textNode?: HTMLDivElement;
+  textNode = createRef<HTMLDivElement>();
 
   constructor(props: Props) {
     super(props);
 
     this.state = {
+      renderDummy: typeof props.inView === 'boolean' ? !props.inView : false,
       isCopied: false,
       editDeadline: null,
       voteErrorMessage: null,
       scoreDelta: 0,
       cachedScore: props.data.score,
       initial: true,
+      ...this.updateState(props),
     };
 
     this.votingPromise = Promise.resolve();
-
-    this.updateState(props);
 
     this.toggleEditing = this.toggleEditing.bind(this);
     this.toggleReplying = this.toggleReplying.bind(this);
@@ -101,7 +104,7 @@ export class Comment extends Component<Props, State> {
   // };
 
   componentWillReceiveProps(nextProps: Props) {
-    this.updateState(nextProps);
+    this.setState(this.updateState(nextProps));
   }
 
   componentDidMount() {
@@ -109,25 +112,29 @@ export class Comment extends Component<Props, State> {
   }
 
   updateState = (props: Props) => {
-    this.setState({
+    const newState: Partial<State> = {
       scoreDelta: props.data.vote,
       cachedScore: props.data.score,
-    });
+    };
 
-    if (props.user) {
-      const userId = props.user!.id;
+    if (props.inView) {
+      newState.renderDummy = false;
+    }
 
-      // set comment edit timer
-      if (userId === props.data.user.id) {
-        const editDuration = StaticStore.config.edit_duration;
-        const timeDiff = StaticStore.serverClientTimeDiff || 0;
-        let editDeadline: Date | null = new Date(new Date(props.data.time).getTime() + timeDiff + editDuration * 1000);
-        if (editDeadline < new Date()) editDeadline = null;
-        this.setState({
-          editDeadline,
-        });
+    // set comment edit timer
+    if (props.user && props.user.id === props.data.user.id) {
+      const editDuration = StaticStore.config.edit_duration;
+      const timeDiff = StaticStore.serverClientTimeDiff || 0;
+      const editDeadline = new Date(new Date(props.data.time).getTime() + timeDiff + editDuration * 1000);
+
+      if (editDeadline < new Date()) {
+        newState.editDeadline = null;
+      } else {
+        newState.editDeadline = editDeadline;
       }
     }
+
+    return newState;
   };
 
   toggleReplying = () => {
@@ -288,20 +295,17 @@ export class Comment extends Component<Props, State> {
     const parentCommentNode = document.getElementById(`${COMMENT_NODE_CLASSNAME_PREFIX}${pid}`);
 
     if (parentCommentNode) {
-      parentCommentNode.scrollIntoView();
+      const top = parentCommentNode.getBoundingClientRect().top;
+      if (!postMessage({ scrollTo: top })) {
+        parentCommentNode.scrollIntoView();
+      }
     }
-  };
-
-  toggleCollapse = () => {
-    this.props.setReplyEditState!({ id: this.props.data.id, state: CommentMode.None });
-
-    this.props.setCollapse!(this.props.data.id, !this.props.collapsed);
   };
 
   copyComment = () => {
     const username = this.props.data.user.name;
     const time = this.props.data.time;
-    const text = this.textNode!.textContent || '';
+    const text = this.textNode.current!.textContent || '';
 
     copy(`<b>${username}</b>&nbsp;${time}<br>${text.replace(/\n+/g, '<br>')}`);
 
@@ -350,7 +354,7 @@ export class Comment extends Component<Props, State> {
     if (this.isCurrentUser()) return "Can't vote for your own comment";
     if (StaticStore.config.positive_score && this.props.data.score < 1) return 'Only positive score allowed';
     if (this.isGuest()) return 'Sign in to vote';
-    if (this.isAnonymous()) return "Anonymous users can't vote";
+    if (this.isAnonymous() && !StaticStore.config.anon_vote) return "Anonymous users can't vote";
     return null;
   };
 
@@ -363,7 +367,7 @@ export class Comment extends Component<Props, State> {
     if (this.props.data.delete) return "Can't vote for deleted comment";
     if (this.isCurrentUser()) return "Can't vote for your own comment";
     if (this.isGuest()) return 'Sign in to vote';
-    if (this.isAnonymous()) return "Anonymous users can't vote";
+    if (this.isAnonymous() && !StaticStore.config.anon_vote) return "Anonymous users can't vote";
     return null;
   };
 
@@ -385,33 +389,33 @@ export class Comment extends Component<Props, State> {
         this.state.isCopied ? (
           <span className="comment__control comment__control_view_inactive">Copied!</span>
         ) : (
-          <span {...getHandleClickProps(this.copyComment)} className="comment__control">
+          <Button kind="link" {...getHandleClickProps(this.copyComment)} mix="comment__control">
             Copy
-          </span>
+          </Button>
         )
       );
 
       controls.push(
-        <span {...getHandleClickProps(this.togglePin)} className="comment__control">
+        <Button kind="link" {...getHandleClickProps(this.togglePin)} mix="comment__control">
           {this.props.data.pin ? 'Unpin' : 'Pin'}
-        </span>
+        </Button>
       );
     }
 
     if (!isCurrentUser) {
       controls.push(
-        <span {...getHandleClickProps(this.hideUser)} className="comment__control">
+        <Button kind="link" {...getHandleClickProps(this.hideUser)} mix="comment__control">
           Hide
-        </span>
+        </Button>
       );
     }
 
     if (isAdmin) {
       if (this.props.isUserBanned) {
         controls.push(
-          <span {...getHandleClickProps(this.onUnblockUserClick)} className="comment__control">
+          <Button kind="link" {...getHandleClickProps(this.onUnblockUserClick)} mix="comment__control">
             Unblock
-          </span>
+          </Button>
         );
       }
 
@@ -434,23 +438,22 @@ export class Comment extends Component<Props, State> {
 
       if (!this.props.data.delete) {
         controls.push(
-          <span {...getHandleClickProps(this.deleteComment)} className="comment__control">
+          <Button kind="link" {...getHandleClickProps(this.deleteComment)} mix="comment__control">
             Delete
-          </span>
+          </Button>
         );
       }
     }
     return controls;
   };
 
-  render(props: RenderableProps<Props>, state: State) {
+  render(props: Props, state: State) {
     const isAdmin = this.isAdmin();
     const isGuest = this.isGuest();
     const isCurrentUser = this.isCurrentUser();
 
     const isReplying = props.editMode === CommentMode.Reply;
     const isEditing = props.editMode === CommentMode.Edit;
-
     const lowCommentScore = StaticStore.config.low_score;
     const downvotingDisabledReason = this.getDownvoteDisabledReason();
     const isDownvotingDisabled = downvotingDisabledReason !== null;
@@ -511,6 +514,7 @@ export class Comment extends Component<Props, State> {
       editing: props.view === 'main' && isEditing,
       theme: props.view === 'preview' ? null : props.theme,
       level: props.level,
+      collapsed: props.collapsed,
     };
 
     if (props.view === 'preview') {
@@ -542,8 +546,10 @@ export class Comment extends Component<Props, State> {
       );
     }
 
-    if (!props.editMode && this.props.inView === false) {
-      const [width, height] = this.base ? [this.base.scrollWidth, this.base.scrollHeight] : [100, 100];
+    if (this.state.renderDummy && !props.editMode) {
+      const [width, height] = this.base
+        ? [(this.base as Element).scrollWidth, (this.base as Element).scrollHeight]
+        : [100, 100];
       return (
         <article
           id={props.disabled ? undefined : `${COMMENT_NODE_CLASSNAME_PREFIX}${o.id}`}
@@ -567,96 +573,88 @@ export class Comment extends Component<Props, State> {
             </a>
           </div>
         )}
-        <div className="comment__body">
-          <div className="comment__info">
-            {props.view !== 'user' && <AvatarIcon theme={this.props.theme} picture={o.user.picture} />}
+        <div className="comment__info">
+          {props.view !== 'user' && !props.collapsed && (
+            <AvatarIcon mix="comment__avatar" theme={this.props.theme} picture={o.user.picture} />
+          )}
 
-            {props.view !== 'user' && (
-              <span
-                {...getHandleClickProps(this.toggleUserInfoVisibility)}
-                className="comment__username"
-                title={o.user.id}
-              >
-                {o.user.name}
-              </span>
-            )}
-
-            {isAdmin && props.view !== 'user' && (
-              <span
-                {...getHandleClickProps(this.toggleVerify)}
-                aria-label="Toggle verification"
-                title={o.user.verified ? 'Verified user' : 'Unverified user'}
-                className={b('comment__verification', {}, { active: o.user.verified, clickable: true })}
-              />
-            )}
-
-            {!isAdmin && !!o.user.verified && props.view !== 'user' && (
-              <span title="Verified user" className={b('comment__verification', {}, { active: true })} />
-            )}
-
-            <a href={`${o.locator.url}#${COMMENT_NODE_CLASSNAME_PREFIX}${o.id}`} className="comment__time">
-              {o.time}
-            </a>
-
-            {!!props.level && props.level > 0 && props.view === 'main' && (
-              <a
-                className="comment__link-to-parent"
-                href={`${o.locator.url}#${COMMENT_NODE_CLASSNAME_PREFIX}${o.pid}`}
-                aria-label="Go to parent comment"
-                title="Go to parent comment"
-                onClick={e => this.scrollToParent(e)}
-              >
-                {' '}
-              </a>
-            )}
-
-            {props.isUserBanned && props.view !== 'user' && <span className="comment__status">Blocked</span>}
-
-            {isAdmin && !props.isUserBanned && props.data.delete && <span className="comment__status">Deleted</span>}
-
-            {!props.disabled && props.view === 'main' && (
-              <span
-                {...getHandleClickProps(this.toggleCollapse)}
-                className={b('comment__action', {}, { type: 'collapse', selected: props.collapsed })}
-              >
-                {props.collapsed ? '+' : '−'}
-              </span>
-            )}
-
-            <span className={b('comment__score', {}, { view: o.score.view })}>
-              <span
-                className={b(
-                  'comment__vote',
-                  {},
-                  { type: 'up', selected: state.scoreDelta === 1, disabled: isUpvotingDisabled }
-                )}
-                aria-disabled={state.scoreDelta === 1 || isUpvotingDisabled ? 'true' : 'false'}
-                {...getHandleClickProps(isUpvotingDisabled ? undefined : this.increaseScore)}
-                title={upvotingDisabledReason || undefined}
-              >
-                Vote up
-              </span>
-
-              <span className="comment__score-value" title={o.controversyText}>
-                {o.score.sign}
-                {o.score.value}
-              </span>
-
-              <span
-                className={b(
-                  'comment__vote',
-                  {},
-                  { type: 'down', selected: state.scoreDelta === -1, disabled: isDownvotingDisabled }
-                )}
-                aria-disabled={state.scoreDelta === -1 || isUpvotingDisabled ? 'true' : 'false'}
-                {...getHandleClickProps(isDownvotingDisabled ? undefined : this.decreaseScore)}
-                title={downvotingDisabledReason || undefined}
-              >
-                Vote down
-              </span>
+          {props.view !== 'user' && (
+            <span
+              {...getHandleClickProps(this.toggleUserInfoVisibility)}
+              className="comment__username"
+              title={o.user.id}
+            >
+              {o.user.name}
             </span>
-          </div>
+          )}
 
+          {isAdmin && props.view !== 'user' && (
+            <span
+              {...getHandleClickProps(this.toggleVerify)}
+              aria-label="Toggle verification"
+              title={o.user.verified ? 'Verified user' : 'Unverified user'}
+              className={b('comment__verification', {}, { active: o.user.verified, clickable: true })}
+            />
+          )}
+
+          {!isAdmin && !!o.user.verified && props.view !== 'user' && (
+            <span title="Verified user" className={b('comment__verification', {}, { active: true })} />
+          )}
+
+          <a href={`${o.locator.url}#${COMMENT_NODE_CLASSNAME_PREFIX}${o.id}`} className="comment__time">
+            {o.time}
+          </a>
+
+          {!!props.level && props.level > 0 && props.view === 'main' && (
+            <a
+              className="comment__link-to-parent"
+              href={`${o.locator.url}#${COMMENT_NODE_CLASSNAME_PREFIX}${o.pid}`}
+              aria-label="Go to parent comment"
+              title="Go to parent comment"
+              onClick={e => this.scrollToParent(e)}
+            >
+              {' '}
+            </a>
+          )}
+
+          {props.isUserBanned && props.view !== 'user' && <span className="comment__status">Blocked</span>}
+
+          {isAdmin && !props.isUserBanned && props.data.delete && <span className="comment__status">Deleted</span>}
+
+          <span className={b('comment__score', {}, { view: o.score.view })}>
+            <span
+              className={b(
+                'comment__vote',
+                {},
+                { type: 'up', selected: state.scoreDelta === 1, disabled: isUpvotingDisabled }
+              )}
+              aria-disabled={state.scoreDelta === 1 || isUpvotingDisabled ? 'true' : 'false'}
+              {...getHandleClickProps(isUpvotingDisabled ? undefined : this.increaseScore)}
+              title={upvotingDisabledReason || undefined}
+            >
+              Vote up
+            </span>
+
+            <span className="comment__score-value" title={o.controversyText}>
+              {o.score.sign}
+              {o.score.value}
+            </span>
+
+            <span
+              className={b(
+                'comment__vote',
+                {},
+                { type: 'down', selected: state.scoreDelta === -1, disabled: isDownvotingDisabled }
+              )}
+              aria-disabled={state.scoreDelta === -1 || isUpvotingDisabled ? 'true' : 'false'}
+              {...getHandleClickProps(isDownvotingDisabled ? undefined : this.decreaseScore)}
+              title={downvotingDisabledReason || undefined}
+            >
+              Vote down
+            </span>
+          </span>
+        </div>
+        <div className="comment__body">
           {!!state.voteErrorMessage && (
             <div className="voting__error" role="alert">
               Voting error: {state.voteErrorMessage}
@@ -666,7 +664,7 @@ export class Comment extends Component<Props, State> {
           {(!props.collapsed || props.view === 'pinned') && (
             <div
               className={b('comment__text', { mix: b('raw-content', {}, { theme: props.theme }) })}
-              ref={r => (this.textNode = r)}
+              ref={this.textNode}
               dangerouslySetInnerHTML={{ __html: o.text }}
             />
           )}
@@ -674,30 +672,31 @@ export class Comment extends Component<Props, State> {
           {(!props.collapsed || props.view === 'pinned') && (
             <div className="comment__actions">
               {!props.data.delete && !props.isCommentsDisabled && !props.disabled && !isGuest && props.view === 'main' && (
-                <span {...getHandleClickProps(this.toggleReplying)} className="comment__action">
+                <Button kind="link" {...getHandleClickProps(this.toggleReplying)} mix="comment__action">
                   {isReplying ? 'Cancel' : 'Reply'}
-                </span>
+                </Button>
               )}
-
               {!props.data.delete &&
                 !props.disabled &&
                 !!o.orig &&
                 isCurrentUser &&
                 (editable || isEditing) &&
                 props.view === 'main' && [
-                  <span
+                  <Button
+                    kind="link"
                     {...getHandleClickProps(this.toggleEditing)}
-                    className="comment__action comment__action_type_edit"
+                    mix={['comment__action', 'comment__action_type_edit']}
                   >
                     {isEditing ? 'Cancel' : 'Edit'}
-                  </span>,
+                  </Button>,
                   !isAdmin && (
-                    <span
+                    <Button
+                      kind="link"
                       {...getHandleClickProps(this.deleteComment)}
-                      className="comment__action comment__action_type_delete"
+                      mix={['comment__action', 'comment__action_type_delete']}
                     >
                       Delete
-                    </span>
+                    </Button>
                   ),
                   state.editDeadline && (
                     <Countdown
@@ -718,7 +717,8 @@ export class Comment extends Component<Props, State> {
         </div>
 
         {isReplying && props.view === 'main' && (
-          <Input
+          <CommentForm
+            user={props.user}
             theme={props.theme}
             value=""
             mode="reply"
@@ -728,11 +728,13 @@ export class Comment extends Component<Props, State> {
             getPreview={this.props.getPreview!}
             autofocus={true}
             uploadImage={uploadImageHandler}
+            simpleView={StaticStore.config.simple_view}
           />
         )}
 
         {isEditing && props.view === 'main' && (
-          <Input
+          <CommentForm
+            user={props.user}
             theme={props.theme}
             value={o.orig}
             mode="edit"
@@ -743,6 +745,7 @@ export class Comment extends Component<Props, State> {
             errorMessage={state.editDeadline === null ? 'Editing time has expired.' : undefined}
             autofocus={true}
             uploadImage={uploadImageHandler}
+            simpleView={StaticStore.config.simple_view}
           />
         )}
       </article>

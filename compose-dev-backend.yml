@@ -1,15 +1,10 @@
 # compose file for local development
-# starts backend on 8080 with basic auth "dev:password" and Dev oauth2 provider on port 8084, UI on http://127.0.0.1:8080/web
+# starts backend on 8080 with basic auth "dev:password" and Dev oauth2 provider on port 8084
+# UI on http://127.0.0.1:8080/web
 #
-# mongo-related tests needs mongodb container running - docker run -d -name=mongo mongo:3.6 --smallfiles
-# start build with backend tests:
-# MONGO_REMARK_TEST=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' mongo) \
-#  docker-compose -f compose-dev-backend.yml build
-#
-# to skip mongo test set MONGO_REMARK_TEST=skip
-#
+# build remark42 docker image - docker-compose -f compose-dev-backend.yml build
 # start remark42 service - docker-compose -f compose-dev-backend.yml up
-version: "2"
+version: '2'
 
 services:
     remark42:
@@ -18,6 +13,7 @@ services:
             dockerfile: Dockerfile
             args:
                 - SKIP_BACKEND_TEST
+                - BACKEND_TEST_TIMEOUT
                 - SKIP_FRONTEND_TEST=true
 
         image: umputun/remark42:dev
@@ -35,8 +31,8 @@ services:
             - "8084:8084" # local oauth2 server
 
         environment:
-#            - APP_UID=1000
-#            - TIME_ZONE=GMT
+            #            - APP_UID=1000
+            #            - TIME_ZONE=GMT
             - REMARK_URL=http://127.0.0.1:8080
             - SECRET=12345
             - STORE_BOLT_PATH=/srv/var/db
@@ -48,7 +44,15 @@ services:
             - NOTIFY_TYPE
             - NOTIFY_TELEGRAM_TOKEN
             - NOTIFY_TELEGRAM_CHAN
+            - NOTIFY_EMAIL_FROM
+            - SMTP_HOST
+            - SMTP_USERNAME
+            - SMTP_PASSWORD
+            - SMTP_PORT
+            - SMTP_TLS
             - EMOJI=true
+            - ANON_VOTE=true
+            - VOTES_IP=true
             - AUTH_EMAIL_ENABLE=true
             - AUTH_ANON=true
             - AUTH_GOOGLE_CID=1111
@@ -57,5 +61,7 @@ services:
             - AUTH_GITHUB_CSEC=1111
             - AUTH_FACEBOOK_CID=1111
             - AUTH_FACEBOOK_CSEC=1111
+            - AUTH_TWITTER_CID=1111
+            - AUTH_TWITTER_CSEC=1111
         volumes:
             - ./var:/srv/var

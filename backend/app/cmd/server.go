@@ -15,6 +15,7 @@ import (
 	"time"
 
 	bolt "github.com/coreos/bbolt"
+	"github.com/dgrijalva/jwt-go"
 	"github.com/go-pkgz/jrpc"
 	log "github.com/go-pkgz/lgr"
 	"github.com/kyokomi/emoji"
@@ -26,7 +27,7 @@ import (
 	"github.com/go-pkgz/auth/provider"
 	"github.com/go-pkgz/auth/provider/sender"
 	"github.com/go-pkgz/auth/token"
-	"github.com/go-pkgz/rest/cache"
+	cache "github.com/go-pkgz/lcw"
 
 	"github.com/umputun/remark/backend/app/migrator"
 	"github.com/umputun/remark/backend/app/notify"
@@ -41,34 +42,38 @@ import (
 
 // ServerCommand with command line flags and env
 type ServerCommand struct {
-	Store  StoreGroup  `group:"store" namespace:"store" env-namespace:"STORE"`
-	Avatar AvatarGroup `group:"avatar" namespace:"avatar" env-namespace:"AVATAR"`
-	Cache  CacheGroup  `group:"cache" namespace:"cache" env-namespace:"CACHE"`
-	Admin  AdminGroup  `group:"admin" namespace:"admin" env-namespace:"ADMIN"`
-	Notify NotifyGroup `group:"notify" namespace:"notify" env-namespace:"NOTIFY"`
-	Image  ImageGroup  `group:"image" namespace:"image" env-namespace:"IMAGE"`
-	SSL    SSLGroup    `group:"ssl" namespace:"ssl" env-namespace:"SSL"`
-	Stream StreamGroup `group:"stream" namespace:"stream" env-namespace:"STREAM"`
+	Store      StoreGroup      `group:"store" namespace:"store" env-namespace:"STORE"`
+	Avatar     AvatarGroup     `group:"avatar" namespace:"avatar" env-namespace:"AVATAR"`
+	Cache      CacheGroup      `group:"cache" namespace:"cache" env-namespace:"CACHE"`
+	Admin      AdminGroup      `group:"admin" namespace:"admin" env-namespace:"ADMIN"`
+	Notify     NotifyGroup     `group:"notify" namespace:"notify" env-namespace:"NOTIFY"`
+	SMTP       SmtpGroup       `group:"smtp" namespace:"smtp" env-namespace:"SMTP"`
+	Image      ImageGroup      `group:"image" namespace:"image" env-namespace:"IMAGE"`
+	SSL        SSLGroup        `group:"ssl" namespace:"ssl" env-namespace:"SSL"`
+	Stream     StreamGroup     `group:"stream" namespace:"stream" env-namespace:"STREAM"`
+	ImageProxy ImageProxyGroup `group:"image-proxy" namespace:"image-proxy" env-namespace:"IMAGE_PROXY"`
 
-	Sites           []string      `long:"site" env:"SITE" default:"remark" description:"site names" env-delim:","`
-	AdminPasswd     string        `long:"admin-passwd" env:"ADMIN_PASSWD" default:"" description:"admin basic auth password"`
-	BackupLocation  string        `long:"backup" env:"BACKUP_PATH" default:"./var/backup" description:"backups location"`
-	MaxBackupFiles  int           `long:"max-back" env:"MAX_BACKUP_FILES" default:"10" description:"max backups to keep"`
-	ImageProxy      bool          `long:"img-proxy" env:"IMG_PROXY" description:"enable image proxy"`
-	MaxCommentSize  int           `long:"max-comment" env:"MAX_COMMENT_SIZE" default:"2048" description:"max comment size"`
-	MaxVotes        int           `long:"max-votes" env:"MAX_VOTES" default:"-1" description:"maximum number of votes per comment"`
-	RestrictVoteIP  bool          `long:"votes-ip" env:"VOTES_IP" description:"restrict votes from the same ip"`
-	DurationVoteIP  time.Duration `long:"votes-ip-time" env:"VOTES_IP_TIME" default:"5m" description:"same ip vote duration"`
-	LowScore        int           `long:"low-score" env:"LOW_SCORE" default:"-5" description:"low score threshold"`
-	CriticalScore   int           `long:"critical-score" env:"CRITICAL_SCORE" default:"-10" description:"critical score threshold"`
-	PositiveScore   bool          `long:"positive-score" env:"POSITIVE_SCORE" description:"enable positive score only"`
-	ReadOnlyAge     int           `long:"read-age" env:"READONLY_AGE" default:"0" description:"read-only age of comments, days"`
-	EditDuration    time.Duration `long:"edit-time" env:"EDIT_TIME" default:"5m" description:"edit window"`
-	Port            int           `long:"port" env:"REMARK_PORT" default:"8080" description:"port"`
-	WebRoot         string        `long:"web-root" env:"REMARK_WEB_ROOT" default:"./web" description:"web root directory"`
-	UpdateLimit     float64       `long:"update-limit" env:"UPDATE_LIMIT" default:"0.5" description:"updates/sec limit"`
-	RestrictedWords []string      `long:"restricted-words" env:"RESTRICTED_WORDS" description:"words prohibited to use in comments" env-delim:","`
-	EnableEmoji     bool          `long:"emoji" env:"EMOJI" description:"enable emoji"`
+	Sites            []string      `long:"site" env:"SITE" default:"remark" description:"site names" env-delim:","`
+	AnonymousVote    bool          `long:"anon-vote" env:"ANON_VOTE" description:"enable anonymous votes (works only with VOTES_IP enabled)"`
+	AdminPasswd      string        `long:"admin-passwd" env:"ADMIN_PASSWD" default:"" description:"admin basic auth password"`
+	BackupLocation   string        `long:"backup" env:"BACKUP_PATH" default:"./var/backup" description:"backups location"`
+	MaxBackupFiles   int           `long:"max-back" env:"MAX_BACKUP_FILES" default:"10" description:"max backups to keep"`
+	LegacyImageProxy bool          `long:"img-proxy" env:"IMG_PROXY" description:"[deprecated, use image-proxy.http2https] enable image proxy"`
+	MaxCommentSize   int           `long:"max-comment" env:"MAX_COMMENT_SIZE" default:"2048" description:"max comment size"`
+	MaxVotes         int           `long:"max-votes" env:"MAX_VOTES" default:"-1" description:"maximum number of votes per comment"`
+	RestrictVoteIP   bool          `long:"votes-ip" env:"VOTES_IP" description:"restrict votes from the same ip"`
+	DurationVoteIP   time.Duration `long:"votes-ip-time" env:"VOTES_IP_TIME" default:"5m" description:"same ip vote duration"`
+	LowScore         int           `long:"low-score" env:"LOW_SCORE" default:"-5" description:"low score threshold"`
+	CriticalScore    int           `long:"critical-score" env:"CRITICAL_SCORE" default:"-10" description:"critical score threshold"`
+	PositiveScore    bool          `long:"positive-score" env:"POSITIVE_SCORE" description:"enable positive score only"`
+	ReadOnlyAge      int           `long:"read-age" env:"READONLY_AGE" default:"0" description:"read-only age of comments, days"`
+	EditDuration     time.Duration `long:"edit-time" env:"EDIT_TIME" default:"5m" description:"edit window"`
+	Port             int           `long:"port" env:"REMARK_PORT" default:"8080" description:"port"`
+	WebRoot          string        `long:"web-root" env:"REMARK_WEB_ROOT" default:"./web" description:"web root directory"`
+	UpdateLimit      float64       `long:"update-limit" env:"UPDATE_LIMIT" default:"0.5" description:"updates/sec limit"`
+	RestrictedWords  []string      `long:"restricted-words" env:"RESTRICTED_WORDS" description:"words prohibited to use in comments" env-delim:","`
+	EnableEmoji      bool          `long:"emoji" env:"EMOJI" description:"enable emoji"`
+	SimpleView       bool          `long:"simpler-view" env:"SIMPLE_VIEW" description:"minimal comment editor mode"`
 
 	Auth struct {
 		TTL struct {
@@ -84,20 +89,26 @@ type ServerCommand struct {
 		Anonymous bool      `long:"anon" env:"ANON" description:"enable anonymous login"`
 		Email     struct {
 			Enable       bool          `long:"enable" env:"ENABLE" description:"enable auth via email"`
-			Host         string        `long:"host" env:"HOST" description:"smtp host"`
-			Port         int           `long:"port" env:"PORT" description:"smtp port"`
-			From         string        `long:"from" env:"FROM" description:"email's from"`
+			From         string        `long:"from" env:"FROM" description:"from email address"`
 			Subject      string        `long:"subj" env:"SUBJ" default:"remark42 confirmation" description:"email's subject"`
 			ContentType  string        `long:"content-type" env:"CONTENT_TYPE" default:"text/html" description:"content type"`
-			TLS          bool          `long:"tls" env:"TLS" description:"enable TLS"`
-			SMTPUserName string        `long:"user" env:"USER" description:"smtp user name"`
-			SMTPPassword string        `long:"passwd" env:"PASSWD" description:"smtp password"`
-			TimeOut      time.Duration `long:"timeout" env:"TIMEOUT" default:"10s" description:"smtp timeout"`
+			Host         string        `long:"host" env:"HOST" description:"[deprecated, use --smtp.host] SMTP host"`
+			Port         int           `long:"port" env:"PORT" description:"[deprecated, use --smtp.port] SMTP password"`
+			SMTPPassword string        `long:"passwd" env:"PASSWD" description:"[deprecated, use --smtp.password] SMTP port"`
+			SMTPUserName string        `long:"user" env:"USER" description:"[deprecated, use --smtp.username] enable TLS"`
+			TLS          bool          `long:"tls" env:"TLS" description:"[deprecated, use --smtp.tls] SMTP TCP connection timeout"`
+			TimeOut      time.Duration `long:"timeout" env:"TIMEOUT" default:"10s" description:"[deprecated, use --smtp.timeout] SMTP TCP connection timeout"`
 			MsgTemplate  string        `long:"template" env:"TEMPLATE" description:"message template file"`
 		} `group:"email" namespace:"email" env-namespace:"EMAIL"`
 	} `group:"auth" namespace:"auth" env-namespace:"AUTH"`
 
 	CommonOpts
+}
+
+// ImageProxyGroup defines options group for image proxy
+type ImageProxyGroup struct {
+	HTTP2HTTPS    bool `long:"http2https" env:"HTTP2HTTPS" description:"enable HTTP->HTTPS proxy"`
+	CacheExternal bool `long:"cache-external" env:"CACHE_EXTERNAL" description:"enable caching for external images"`
 }
 
 // AuthGroup defines options group for auth params
@@ -108,7 +119,7 @@ type AuthGroup struct {
 
 // StoreGroup defines options group for store params
 type StoreGroup struct {
-	Type string `long:"type" env:"TYPE" description:"type of storage" choice:"bolt" choice:"rpc" default:"bolt"`
+	Type string `long:"type" env:"TYPE" description:"type of storage" choice:"bolt" choice:"rpc" default:"bolt"` // nolint
 	Bolt struct {
 		Path    string        `long:"path" env:"PATH" default:"./var" description:"parent dir for bolt files"`
 		Timeout time.Duration `long:"timeout" env:"TIMEOUT" default:"30s" description:"bolt timeout"`
@@ -118,7 +129,7 @@ type StoreGroup struct {
 
 // ImageGroup defines options group for store pictures
 type ImageGroup struct {
-	Type string `long:"type" env:"TYPE" description:"type of storage" choice:"fs" choice:"bolt" default:"fs"`
+	Type string `long:"type" env:"TYPE" description:"type of storage" choice:"fs" choice:"bolt" default:"fs"` // nolint
 	FS   struct {
 		Path       string `long:"path" env:"PATH" default:"./var/pictures" description:"images location"`
 		Staging    string `long:"staging" env:"STAGING" default:"./var/pictures.staging" description:"staging location"`
@@ -128,13 +139,13 @@ type ImageGroup struct {
 		File string `long:"file" env:"FILE" default:"./var/pictures.db" description:"images bolt file location"`
 	} `group:"bolt" namespace:"bolt" env-namespace:"bolt"`
 	MaxSize      int `long:"max-size" env:"MAX_SIZE" default:"5000000" description:"max size of image file"`
-	ResizeWidth  int `long:"resize-width" env:"RESIZE_WIDTH" default:"800" description:"width of resized image"`
-	ResizeHeight int `long:"resize-height" env:"RESIZE_HEIGHT" default:"300" description:"height of resized image"`
+	ResizeWidth  int `long:"resize-width" env:"RESIZE_WIDTH" default:"2400" description:"width of resized image"`
+	ResizeHeight int `long:"resize-height" env:"RESIZE_HEIGHT" default:"900" description:"height of resized image"`
 }
 
 // AvatarGroup defines options group for avatar params
 type AvatarGroup struct {
-	Type string `long:"type" env:"TYPE" description:"type of avatar storage" choice:"fs" choice:"bolt" choice:"uri" default:"fs"`
+	Type string `long:"type" env:"TYPE" description:"type of avatar storage" choice:"fs" choice:"bolt" choice:"uri" default:"fs"` //nolint
 	FS   struct {
 		Path string `long:"path" env:"PATH" default:"./var/avatars" description:"avatars location"`
 	} `group:"fs" namespace:"fs" env-namespace:"FS"`
@@ -147,7 +158,7 @@ type AvatarGroup struct {
 
 // CacheGroup defines options group for cache params
 type CacheGroup struct {
-	Type string `long:"type" env:"TYPE" description:"type of cache" choice:"mem" choice:"none" default:"mem"`
+	Type string `long:"type" env:"TYPE" description:"type of cache" choice:"mem" choice:"none" default:"mem"` // nolint
 	Max  struct {
 		Items int   `long:"items" env:"ITEMS" default:"1000" description:"max cached items"`
 		Value int   `long:"value" env:"VALUE" default:"65536" description:"max size of cached value"`
@@ -157,7 +168,7 @@ type CacheGroup struct {
 
 // AdminGroup defines options group for admin params
 type AdminGroup struct {
-	Type   string `long:"type" env:"TYPE" description:"type of admin store" choice:"shared" choice:"rpc" default:"shared"`
+	Type   string `long:"type" env:"TYPE" description:"type of admin store" choice:"shared" choice:"rpc" default:"shared"` //nolint
 	Shared struct {
 		Admins []string `long:"id" env:"ID" description:"admin(s) ids" env-delim:","`
 		Email  string   `long:"email" env:"EMAIL" default:"" description:"admin email"`
@@ -165,21 +176,35 @@ type AdminGroup struct {
 	RPC RPCGroup `group:"rpc" namespace:"rpc" env-namespace:"RPC"`
 }
 
+// SmtpGroup defines options for SMTP server connection, used in auth and notify modules
+type SmtpGroup struct {
+	Host     string        `long:"host" env:"HOST" description:"SMTP host"`
+	Port     int           `long:"port" env:"PORT" description:"SMTP port"`
+	Username string        `long:"username" env:"USERNAME" description:"SMTP user name"`
+	Password string        `long:"password" env:"PASSWORD" description:"SMTP password"`
+	TLS      bool          `long:"tls" env:"TLS" description:"enable TLS"`
+	TimeOut  time.Duration `long:"timeout" env:"TIMEOUT" default:"10s" description:"SMTP TCP connection timeout"`
+}
+
 // NotifyGroup defines options for notification
 type NotifyGroup struct {
-	Type      string `long:"type" env:"TYPE" description:"type of notification" choice:"none" choice:"telegram" default:"none"`
-	QueueSize int    `long:"queue" env:"QUEUE" description:"size of notification queue" default:"100"`
+	Type      []string `long:"type" env:"TYPE" description:"type of notification" choice:"none" choice:"telegram" choice:"email" default:"none" env-delim:","` //nolint
+	QueueSize int      `long:"queue" env:"QUEUE" description:"size of notification queue" default:"100"`
 	Telegram  struct {
 		Token   string        `long:"token" env:"TOKEN" description:"telegram token"`
 		Channel string        `long:"chan" env:"CHAN" description:"telegram channel"`
 		Timeout time.Duration `long:"timeout" env:"TIMEOUT" default:"5s" description:"telegram timeout"`
 		API     string        `long:"api" env:"API" default:"https://api.telegram.org/bot" description:"telegram api prefix"`
 	} `group:"telegram" namespace:"telegram" env-namespace:"TELEGRAM"`
+	Email struct {
+		From                string `long:"fromAddress" env:"FROM" description:"from email address"`
+		VerificationSubject string `long:"verification_subj" env:"VERIFICATION_SUBJ" description:"verification message subject"`
+	} `group:"email" namespace:"email" env-namespace:"EMAIL"`
 }
 
 // SSLGroup defines options group for server ssl params
 type SSLGroup struct {
-	Type         string `long:"type" env:"TYPE" description:"ssl (auto)support" choice:"none" choice:"static" choice:"auto" default:"none"`
+	Type         string `long:"type" env:"TYPE" description:"ssl (auto) support" choice:"none" choice:"static" choice:"auto" default:"none"` //nolint
 	Port         int    `long:"port" env:"PORT" description:"port number for https server" default:"8443"`
 	Cert         string `long:"cert" env:"CERT" description:"path to cert.pem file"`
 	Key          string `long:"key" env:"KEY" description:"path to key.pem file"`
@@ -200,6 +225,12 @@ type RPCGroup struct {
 	TimeOut      time.Duration `long:"timeout" env:"TIMEOUT" default:"5s" description:"http timeout"`
 	AuthUser     string        `long:"auth_user" env:"AUTH_USER" description:"basic auth user name"`
 	AuthPassword string        `long:"auth_passwd" env:"AUTH_PASSWD" description:"basic auth user password"`
+}
+
+// LoadingCache defines interface for caching
+type LoadingCache interface {
+	Get(key cache.Key, fn func() ([]byte, error)) (data []byte, err error) // load from cache if found or put to cache and return
+	Flush(req cache.FlusherRequest)                                        // evict matched records
 }
 
 // serverApp holds all active objects
@@ -241,6 +272,40 @@ func (s *ServerCommand) Execute(args []string) error {
 	}
 	log.Printf("[INFO] remark terminated")
 	return nil
+}
+
+// HandleDeprecatedFlags sets new flags from deprecated returns their list
+func (s *ServerCommand) HandleDeprecatedFlags() (result []DeprecatedFlag) {
+	// 1.5.0
+	if s.Auth.Email.Host != "" && s.SMTP.Host == "" {
+		s.SMTP.Host = s.Auth.Email.Host
+		result = append(result, DeprecatedFlag{Old: "auth.email.host", New: "smtp.host", RemoveVersion: "1.7.0"})
+	}
+	if s.Auth.Email.Port != 0 && s.SMTP.Port == 0 {
+		s.SMTP.Port = s.Auth.Email.Port
+		result = append(result, DeprecatedFlag{Old: "auth.email.port", New: "smtp.port", RemoveVersion: "1.7.0"})
+	}
+	if s.Auth.Email.TLS && !s.SMTP.TLS {
+		s.SMTP.TLS = s.Auth.Email.TLS
+		result = append(result, DeprecatedFlag{Old: "auth.email.tls", New: "smtp.tls", RemoveVersion: "1.7.0"})
+	}
+	if s.Auth.Email.SMTPUserName != "" && s.SMTP.Username == "" {
+		s.SMTP.Username = s.Auth.Email.SMTPUserName
+		result = append(result, DeprecatedFlag{Old: "auth.email.user", New: "smtp.username", RemoveVersion: "1.7.0"})
+	}
+	if s.Auth.Email.SMTPPassword != "" && s.SMTP.Password == "" {
+		s.SMTP.Password = s.Auth.Email.SMTPPassword
+		result = append(result, DeprecatedFlag{Old: "auth.email.passwd", New: "smtp.password", RemoveVersion: "1.7.0"})
+	}
+	if s.Auth.Email.TimeOut != 10*time.Second && s.SMTP.TimeOut == 10*time.Second {
+		s.SMTP.TimeOut = s.Auth.Email.TimeOut
+		result = append(result, DeprecatedFlag{Old: "auth.email.timeout", New: "smtp.timeout", RemoveVersion: "1.7.0"})
+	}
+	if s.LegacyImageProxy && !s.ImageProxy.HTTP2HTTPS {
+		s.ImageProxy.HTTP2HTTPS = s.LegacyImageProxy
+		result = append(result, DeprecatedFlag{Old: "img-proxy", New: "image-proxy.http2https", RemoveVersion: "1.7.0"})
+	}
+	return result
 }
 
 // newServerApp prepares application and return it with all active parts
@@ -305,16 +370,33 @@ func (s *ServerCommand) newServerApp() (*serverApp, error) {
 		DisqusImporter:    &migrator.Disqus{DataStore: dataService},
 		WordPressImporter: &migrator.WordPress{DataStore: dataService},
 		NativeExporter:    &migrator.Native{DataStore: dataService},
+		UrlMapperMaker:    migrator.NewUrlMapper,
 		KeyStore:          adminStore,
 	}
 
-	notifyService, err := s.makeNotify(dataService)
+	var emailNotifications bool
+	notifyService, err := s.makeNotify(dataService, authenticator)
+
+	for _, t := range s.Notify.Type {
+		switch t {
+		case "email":
+			emailNotifications = true
+		}
+	}
+
 	if err != nil {
 		log.Printf("[WARN] failed to make notify service, %s", err)
 		notifyService = notify.NopService // disable notifier
+		emailNotifications = false        // email notifications are not available in this case
 	}
 
-	imgProxy := &proxy.Image{Enabled: s.ImageProxy, RoutePath: "/api/v1/img", RemarkURL: s.RemarkURL}
+	imgProxy := &proxy.Image{
+		HTTP2HTTPS:    s.ImageProxy.HTTP2HTTPS,
+		CacheExternal: s.ImageProxy.CacheExternal,
+		RoutePath:     "/api/v1/img",
+		RemarkURL:     s.RemarkURL,
+		ImageService:  imageService,
+	}
 	emojiFmt := store.CommentConverterFunc(func(text string) string { return text })
 	if s.EnableEmoji {
 		emojiFmt = func(text string) string { return emoji.Sprint(text) }
@@ -347,7 +429,10 @@ func (s *ServerCommand) newServerApp() (*serverApp, error) {
 			Refresh:   s.Stream.RefreshInterval,
 			MaxActive: int32(s.Stream.MaxActive),
 		},
-		EmojiEnabled: s.EnableEmoji,
+		EmailNotifications: emailNotifications,
+		EmojiEnabled:       s.EnableEmoji,
+		AnonVote:           s.AnonymousVote && s.RestrictVoteIP,
+		SimpleView:         s.SimpleView,
 	}
 
 	srv.ScoreThresholds.Low, srv.ScoreThresholds.Critical = s.LowScore, s.CriticalScore
@@ -481,6 +566,22 @@ func (s *ServerCommand) makeAvatarStore() (avatar.Store, error) {
 
 func (s *ServerCommand) makePicturesStore() (*image.Service, error) {
 	switch s.Image.Type {
+	case "bolt":
+		boltImageStore, err := image.NewBoltStorage(
+			s.Image.Bolt.File,
+			s.Image.MaxSize,
+			s.Image.ResizeHeight,
+			s.Image.ResizeWidth,
+			bolt.Options{},
+		)
+		if err != nil {
+			return nil, err
+		}
+		return &image.Service{
+			Store:    boltImageStore,
+			ImageAPI: s.RemarkURL + "/api/v1/picture/",
+			TTL:      5 * s.EditDuration, // add extra time to image TTL for staging
+		}, nil
 	case "fs":
 		if err := makeDirs(s.Image.FS.Path); err != nil {
 			return nil, err
@@ -525,14 +626,18 @@ func (s *ServerCommand) makeAdminStore() (admin.Store, error) {
 	}
 }
 
-func (s *ServerCommand) makeCache() (cache.LoadingCache, error) {
+func (s *ServerCommand) makeCache() (LoadingCache, error) {
 	log.Printf("[INFO] make cache, type=%s", s.Cache.Type)
 	switch s.Cache.Type {
 	case "mem":
-		return cache.NewMemoryCache(cache.MaxCacheSize(s.Cache.Max.Size), cache.MaxValSize(s.Cache.Max.Value),
+		backend, err := cache.NewLruCache(cache.MaxCacheSize(s.Cache.Max.Size), cache.MaxValSize(s.Cache.Max.Value),
 			cache.MaxKeys(s.Cache.Max.Items))
+		if err != nil {
+			return nil, errors.Wrap(err, "cache backend initialization")
+		}
+		return cache.NewScache(backend), nil
 	case "none":
-		return &cache.Nop{}, nil
+		return cache.NewScache(&cache.Nop{}), nil
 	}
 	return nil, errors.Errorf("unsupported cache type %s", s.Cache.Type)
 }
@@ -547,10 +652,10 @@ var msgTemplate = `
 <body>
 <div style="text-align: center; font-family: Arial, sans-serif; font-size: 18px;">
 	<h1 style="position: relative; color: #4fbbd6; margin-top: 0.2em;">Remark42</h1>
-	<p style="position: relative; max-width: 20em; margin: 0 auto 1em auto; line-height: 1.4em;">Confirmation&nbsp;for <b>{{.User}}</b> on&nbsp;site&nbsp;<b>{{.Site}}</b></p>
+	<p style="position: relative; max-width: 20em; margin: 0 auto 1em auto; line-height: 1.4em;">Confirmation for <b>{{.User}}</b> on site <b>{{.Site}}</b></p>
 	<div style="background-color: #eee; max-width: 20em; margin: 0 auto; border-radius: 0.4em; padding: 0.5em;">
 		<p style="position: relative; margin: 0 0 0.5em 0;">TOKEN</p>
-		<p style="position: relative; font-size: 0.7em; opacity: 0.8;"><i>Copy and&nbsp;paste this text into “token” field on&nbsp;comments page</i></p>
+		<p style="position: relative; font-size: 0.7em; opacity: 0.8;"><i>Copy and paste this text into “token” field on comments page</i></p>
 		<p style="position: relative; font-family: monospace; background-color: #fff; margin: 0; padding: 0.5em; word-break: break-all; text-align: left; border-radius: 0.2em; -webkit-user-select: all; user-select: all;">{{.Token}}</p>
 	</div>
 	<p style="position: relative; margin-top: 2em; font-size: 0.8em; opacity: 0.8;"><i>Sent to {{.Address}}</i></p>
@@ -591,15 +696,15 @@ func (s *ServerCommand) addAuthProviders(authenticator *auth.Service) {
 
 	if s.Auth.Email.Enable {
 		params := sender.EmailParams{
-			Host:         s.Auth.Email.Host,
-			Port:         s.Auth.Email.Port,
+			Host:         s.SMTP.Host,
+			Port:         s.SMTP.Port,
+			SMTPUserName: s.SMTP.Username,
+			SMTPPassword: s.SMTP.Password,
+			TimeOut:      s.SMTP.TimeOut,
+			TLS:          s.SMTP.TLS,
 			From:         s.Auth.Email.From,
 			Subject:      s.Auth.Email.Subject,
 			ContentType:  s.Auth.Email.ContentType,
-			TLS:          s.Auth.Email.TLS,
-			SMTPUserName: s.Auth.Email.SMTPUserName,
-			SMTPPassword: s.Auth.Email.SMTPPassword,
-			TimeOut:      s.Auth.Email.TimeOut,
 		}
 		sndr := sender.NewEmailClient(params, log.Default())
 		authenticator.AddVerifProvider("email", s.loadEmailTemplate(), sndr)
@@ -644,20 +749,67 @@ func (s *ServerCommand) loadEmailTemplate() string {
 	return tmpl
 }
 
-func (s *ServerCommand) makeNotify(dataStore *service.DataStore) (*notify.Service, error) {
-	log.Printf("[INFO] make notify, type=%s", s.Notify.Type)
-	switch s.Notify.Type {
-	case "telegram":
-		tg, err := notify.NewTelegram(s.Notify.Telegram.Token, s.Notify.Telegram.Channel,
-			s.Notify.Telegram.Timeout, s.Notify.Telegram.API)
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to create telegram notification destination")
+func (s *ServerCommand) makeNotify(dataStore *service.DataStore, authenticator *auth.Service) (*notify.Service, error) {
+	var notifyService *notify.Service
+	var destinations []notify.Destination
+	for _, t := range s.Notify.Type {
+		switch t {
+		case "telegram":
+			tg, err := notify.NewTelegram(s.Notify.Telegram.Token, s.Notify.Telegram.Channel,
+				s.Notify.Telegram.Timeout, s.Notify.Telegram.API)
+			if err != nil {
+				return nil, errors.Wrap(err, "failed to create telegram notification destination")
+			}
+			destinations = append(destinations, tg)
+		case "email":
+			emailParams := notify.EmailParams{
+				From:                s.Notify.Email.From,
+				VerificationSubject: s.Notify.Email.VerificationSubject,
+				UnsubscribeURL:      s.RemarkURL + "/email/unsubscribe.html",
+				// TODO: uncomment after #560 frontend part is ready and URL is known
+				//SubscribeURL:        s.RemarkURL + "/subscribe.html?token=",
+				TokenGenFn: func(userID, email, site string) (string, error) {
+					claims := token.Claims{
+						Handshake: &token.Handshake{ID: userID + "::" + email},
+						StandardClaims: jwt.StandardClaims{
+							Audience:  site,
+							ExpiresAt: time.Now().Add(100 * 365 * 24 * time.Hour).Unix(),
+							NotBefore: time.Now().Add(-1 * time.Minute).Unix(),
+							Issuer:    "remark42",
+						},
+					}
+					tkn, err := authenticator.TokenService().Token(claims)
+					if err != nil {
+						return "", errors.Wrapf(err, "failed to make unsubscription token")
+					}
+					return tkn, nil
+				},
+			}
+			smtpParams := notify.SmtpParams{
+				Host:     s.SMTP.Host,
+				Port:     s.SMTP.Port,
+				TLS:      s.SMTP.TLS,
+				Username: s.SMTP.Username,
+				Password: s.SMTP.Password,
+				TimeOut:  s.SMTP.TimeOut,
+			}
+			emailService, err := notify.NewEmail(emailParams, smtpParams)
+			if err != nil {
+				return nil, errors.Wrap(err, "failed to create email notification destination")
+			}
+			destinations = append(destinations, emailService)
+		case "none":
+			notifyService = notify.NopService
+		default:
+			return nil, errors.Errorf("unsupported notification type %q", s.Notify.Type)
 		}
-		return notify.NewService(dataStore, s.Notify.QueueSize, tg), nil
-	case "none":
-		return notify.NopService, nil
 	}
-	return nil, errors.Errorf("unsupported notification type %q", s.Notify.Type)
+
+	if len(destinations) != 0 {
+		log.Printf("[INFO] make notify, types=%s", s.Notify.Type)
+		notifyService = notify.NewService(dataStore, s.Notify.QueueSize, destinations...)
+	}
+	return notifyService, nil
 }
 
 func (s *ServerCommand) makeSSLConfig() (config api.SSLConfig, err error) {
@@ -706,6 +858,11 @@ func (s *ServerCommand) makeAuthenticator(ds *service.DataStore, avas avatar.Sto
 			}
 			c.User.SetAdmin(ds.IsAdmin(c.Audience, c.User.ID))
 			c.User.SetBoolAttr("blocked", ds.IsBlocked(c.Audience, c.User.ID))
+			var err error
+			c.User.Email, err = ds.GetUserEmail(c.Audience, c.User.ID)
+			if err != nil {
+				log.Printf("[WARN] can't read email for %s, %v", c.User.ID, err)
+			}
 			return c
 		}),
 		AdminPasswd: s.AdminPasswd,

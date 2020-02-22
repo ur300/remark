@@ -1,36 +1,41 @@
-/** @jsx h */
-import { h, RenderableProps } from 'preact';
-import { connect } from 'preact-redux';
+/** @jsx createElement */
+import { createElement, FunctionComponent } from 'preact';
+import { useSelector, useDispatch, shallowEqual } from 'react-redux';
+import { useCallback } from 'preact/hooks';
 import b from 'bem-react-helper';
 
-import { ConnectedComment as Comment } from '@app/components/comment/connected-comment';
 import { Comment as CommentInterface } from '@app/common/types';
-import { getThreadIsCollapsed } from '@app/store/thread/getters';
+import { getHandleClickProps } from '@app/common/accessibility';
 import { StoreState } from '@app/store';
-import { InView } from '../root/in-view/in-view';
+import { setCollapse } from '@app/store/thread/actions';
+import { getThreadIsCollapsed } from '@app/store/thread/getters';
+import { InView } from '@app/components/root/in-view/in-view';
+import { ConnectedComment as Comment } from '@app/components/comment/connected-comment';
 
-const mapStateToProps = (state: StoreState, props: { id: CommentInterface['id'] }) => {
-  const comment = state.comments[props.id];
-  return {
-    comment,
-    childs: state.childComments[props.id],
-    collapsed: getThreadIsCollapsed(state, comment),
-    isCommentsDisabled: !!state.info.read_only,
-    theme: state.theme,
-  };
-};
-
-type Props = {
+interface Props {
   id: CommentInterface['id'];
-  childs?: (CommentInterface['id'])[];
+  childs?: CommentInterface['id'][];
   level: number;
   mix?: string;
 
   getPreview(text: string): Promise<string>;
-} & ReturnType<typeof mapStateToProps>;
+}
 
-function Thread(props: RenderableProps<Props>) {
-  const { collapsed, comment, childs, level, theme } = props;
+const commentSelector = (id: string) => (state: StoreState) => {
+  const { theme, comments, childComments } = state;
+  const comment = comments[id];
+  const childs = childComments[id];
+  const collapsed = getThreadIsCollapsed(comment)(state);
+
+  return { comment, childs, collapsed, theme };
+};
+
+export const Thread: FunctionComponent<Props> = ({ id, level, mix, getPreview }) => {
+  const dispatch = useDispatch();
+  const { collapsed, comment, childs, theme } = useSelector(commentSelector(id), shallowEqual);
+  const collapse = useCallback(() => {
+    dispatch(setCollapse(id, !collapsed));
+  }, [id, collapsed]);
 
   if (comment.hidden) return null;
 
@@ -39,7 +44,7 @@ function Thread(props: RenderableProps<Props>) {
 
   return (
     <div
-      className={b('thread', props, { level, theme, indented })}
+      className={b('thread', { mix }, { level, theme, indented })}
       role={['listitem'].concat(!collapsed && !!repliesCount ? 'list' : []).join(' ')}
       aria-expanded={!collapsed}
     >
@@ -47,7 +52,7 @@ function Thread(props: RenderableProps<Props>) {
         {inviewProps => (
           <Comment
             ref={ref => inviewProps.ref(ref)}
-            key={`comment-${props.id}`}
+            key={`comment-${id}`}
             view="main"
             data={comment}
             repliesCount={repliesCount}
@@ -60,11 +65,18 @@ function Thread(props: RenderableProps<Props>) {
       {!collapsed &&
         childs &&
         !!childs.length &&
-        childs.map(id => (
-          <ConnectedThread key={`thread-${id}`} id={id} level={Math.min(level + 1, 6)} getPreview={props.getPreview} />
+        childs.map(currentId => (
+          <Thread key={`thread-${currentId}`} id={currentId} level={Math.min(level + 1, 6)} getPreview={getPreview} />
         ))}
+      {level < 6 && (
+        <div
+          className={b('thread__collapse', { mods: { collapsed } })}
+          role="button"
+          {...getHandleClickProps(collapse)}
+        >
+          <div></div>
+        </div>
+      )}
     </div>
   );
-}
-
-export const ConnectedThread = connect(mapStateToProps)(Thread);
+};
