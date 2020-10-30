@@ -1,4 +1,4 @@
-FROM umputun/baseimage:buildgo-latest as build-backend
+FROM umputun/baseimage:buildgo-v1.6.1 as build-backend
 
 ARG CI
 ARG DRONE
@@ -16,11 +16,14 @@ WORKDIR /build/backend
 
 ENV GOFLAGS="-mod=vendor"
 
+# install gcc in order to be able to go test package with -race
+RUN apk --no-cache add gcc libc-dev
+
 # run tests
 RUN \
     cd app && \
     if [ -z "$SKIP_BACKEND_TEST" ] ; then \
-        go test -p 1 -timeout="${BACKEND_TEST_TIMEOUT:-300s}" -covermode=count -coverprofile=/profile.cov_tmp ./... && \
+        CGO_ENABLED=1 go test -race -p 1 -timeout="${BACKEND_TEST_TIMEOUT:-300s}" -covermode=atomic -coverprofile=/profile.cov_tmp ./... && \
         cat /profile.cov_tmp | grep -v "_mock.go" > /profile.cov ; \
         golangci-lint run --config ../.golangci.yml ./... ; \
     else echo "skip backend tests and linter" ; fi
@@ -32,7 +35,7 @@ RUN \
     echo "version=$version" && \
     go build -o remark42 -ldflags "-X main.revision=${version} -s -w" ./app
 
-FROM node:10.11-alpine as build-frontend-deps
+FROM node:12.16-alpine as build-frontend-deps
 
 ARG CI
 ENV HUSKY_SKIP_INSTALL=true
@@ -40,9 +43,9 @@ ENV HUSKY_SKIP_INSTALL=true
 RUN apk add --no-cache --update git
 ADD frontend/package.json /srv/frontend/package.json
 ADD frontend/package-lock.json /srv/frontend/package-lock.json
-RUN cd /srv/frontend && CI=true npm ci
+RUN cd /srv/frontend && CI=true npm ci --loglevel warn
 
-FROM node:10.11-alpine as build-frontend
+FROM node:12.16-alpine as build-frontend
 
 ARG CI
 ARG SKIP_FRONTEND_TEST
@@ -51,11 +54,11 @@ ARG NODE_ENV=production
 COPY --from=build-frontend-deps /srv/frontend/node_modules /srv/frontend/node_modules
 ADD frontend /srv/frontend
 RUN cd /srv/frontend && \
-    if [ -z "$SKIP_FRONTEND_TEST" ] ; then npx run-p check lint lint:style test build ; \
+    if [ -z "$SKIP_FRONTEND_TEST" ] ; then npx run-p lint test check; \
     else echo "skip frontend tests and lint" ; npm run build ; fi && \
     rm -rf ./node_modules
 
-FROM umputun/baseimage:app
+FROM umputun/baseimage:app-v1.6.1
 
 WORKDIR /srv
 
@@ -66,6 +69,7 @@ ADD backend/scripts/import.sh /usr/local/bin/import
 RUN chmod +x /entrypoint.sh /usr/local/bin/backup /usr/local/bin/restore /usr/local/bin/import
 
 COPY --from=build-backend /build/backend/remark42 /srv/remark42
+COPY --from=build-backend /build/backend/templates /srv
 COPY --from=build-frontend /srv/frontend/public/ /srv/web
 RUN chown -R app:app /srv
 RUN ln -s /srv/remark42 /usr/bin/remark42

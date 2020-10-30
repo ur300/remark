@@ -1,4 +1,4 @@
-export { AuthPanel } from './auth-panel';
+export { default } from './auth-panel';
 
 import './auth-panel.scss';
 

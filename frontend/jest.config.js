@@ -9,10 +9,13 @@ module.exports = {
   moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json', 'node'],
   moduleNameMapper: {
     '\\.module.pcss': `identity-obj-proxy`,
+    '\\.pcss': `identity-obj-proxy`,
     '\\.scss$': '<rootDir>/app/testUtils/mockStyles.js',
     '@app/(.*)': '<rootDir>/app/$1',
     '^react$': 'preact/compat',
     '^react-dom$': 'preact/compat',
   },
-  setupFilesAfterEnv: ['<rootDir>/app/testUtils/index.ts'],
+  setupFilesAfterEnv: ['<rootDir>/app/testUtils/index.ts', 'jest-localstorage-mock'],
+  transformIgnorePatterns: ['/node_modules/(?!intl-messageformat|intl-messageformat-parser).+\\.js$'],
+  collectCoverageFrom: ['!app/testUtils/**', '!app/locales/**'],
 };

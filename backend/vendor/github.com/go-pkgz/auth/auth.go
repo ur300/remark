@@ -1,4 +1,4 @@
-// Package auth provides "social login" with Github, Google, Facebook and Yandex as well as custom auth providers.
+// Package auth provides "social login" with Github, Google, Facebook, Microsoft, Yandex and Battle.net as well as custom auth providers.
 package auth
 
 import (
@@ -58,13 +58,14 @@ type Opts struct {
 	URL       string          // root url for the rest service, i.e. http://blah.example.com, required
 	Validator token.Validator // validator allows to reject some valid tokens with user-defined logic
 
-	AvatarStore       avatar.Store // store to save/load avatars, required
+	AvatarStore       avatar.Store // store to save/load avatars, required (use avatar.NoOp to disable avatars support)
 	AvatarResizeLimit int          // resize avatar's limit in pixels
 	AvatarRoutePath   string       // avatar routing prefix, i.e. "/api/v1/avatar", default `/avatar`
 	UseGravatar       bool         // for email based auth (verified provider) use gravatar service
 
 	AdminPasswd    string                  // if presented, allows basic auth with user admin and given password
 	AudienceReader token.Audience          // list of allowed aud values, default (empty) allows any
+	AudSecrets     bool                    // allow multiple secrets (secret per aud)
 	Logger         logger.L                // logger interface, default is no logging at all
 	RefreshCache   middleware.RefreshCache // optional cache to keep refreshed tokens
 }
@@ -107,10 +108,11 @@ func NewService(opts Opts) (res *Service) {
 		JWTQuery:       opts.JWTQuery,
 		Issuer:         res.issuer,
 		AudienceReader: opts.AudienceReader,
+		AudSecrets:     opts.AudSecrets,
 	})
 
 	if opts.SecretReader == nil {
-		jwtService.SecretReader = token.SecretFunc(func() (string, error) {
+		jwtService.SecretReader = token.SecretFunc(func(string) (string, error) {
 			return "", errors.New("secrets reader not available")
 		})
 		res.logger.Logf("[WARN] no secret reader defined")
@@ -220,6 +222,10 @@ func (s *Service) AddProvider(name, cid, csecret string) {
 		s.providers = append(s.providers, provider.NewService(provider.NewFacebook(p)))
 	case "yandex":
 		s.providers = append(s.providers, provider.NewService(provider.NewYandex(p)))
+	case "battlenet":
+		s.providers = append(s.providers, provider.NewService(provider.NewBattlenet(p)))
+	case "microsoft":
+		s.providers = append(s.providers, provider.NewService(provider.NewMicrosoft(p)))
 	case "twitter":
 		s.providers = append(s.providers, provider.NewService(provider.NewTwitter(p)))
 	case "dev":

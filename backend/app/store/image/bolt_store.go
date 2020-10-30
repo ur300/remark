@@ -4,14 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"io"
-	"io/ioutil"
-	"path"
 	"time"
 
-	bolt "github.com/coreos/bbolt"
 	log "github.com/go-pkgz/lgr"
 	"github.com/pkg/errors"
+	bolt "go.etcd.io/bbolt"
 )
 
 const imagesStagedBktName = "imagesStaged"
@@ -22,16 +19,13 @@ const insertTimeBktName = "insertTimestamps"
 // It uses 3 buckets to manage images data.
 // Two buckets contains image data (staged and committed images). Third bucket holds insertion timestamps.
 type Bolt struct {
-	fileName  string
-	db        *bolt.DB
-	MaxSize   int
-	MaxHeight int
-	MaxWidth  int
+	fileName string
+	db       *bolt.DB
 }
 
 // NewBoltStorage create bolt image store
-func NewBoltStorage(fileName string, maxSize int, maxHeight int, maxWidth int, options bolt.Options) (*Bolt, error) {
-	db, err := bolt.Open(fileName, 0600, &options)
+func NewBoltStorage(fileName string, options bolt.Options) (*Bolt, error) {
+	db, err := bolt.Open(fileName, 0600, &options) //nolint:gocritic //octalLiteral is OK as FileMode
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to make boltdb for %s", fileName)
 	}
@@ -52,49 +46,33 @@ func NewBoltStorage(fileName string, maxSize int, maxHeight int, maxWidth int, o
 		return nil, errors.Wrapf(err, "failed to initialize boltdb db %q buckets", fileName)
 	}
 	return &Bolt{
-		db:        db,
-		fileName:  fileName,
-		MaxSize:   maxSize,
-		MaxHeight: maxHeight,
-		MaxWidth:  maxWidth,
+		db:       db,
+		fileName: fileName,
 	}, nil
 }
 
-// SaveWithID saves data from a reader, for given id
-func (b *Bolt) SaveWithID(id string, r io.Reader) (string, error) {
-	data, err := readAndValidateImage(r, b.MaxSize)
-	if err != nil {
-		return "", errors.Wrapf(err, "can't load image with ID %s", id)
-	}
-
-	data = resize(data, b.MaxWidth, b.MaxHeight)
-
-	err = b.db.Update(func(tx *bolt.Tx) error {
-		if err = tx.Bucket([]byte(imagesStagedBktName)).Put([]byte(id), data); err != nil {
+// Save saves image for given id to staging bucket in DB
+func (b *Bolt) Save(id string, img []byte) error {
+	err := b.db.Update(func(tx *bolt.Tx) error {
+		if err := tx.Bucket([]byte(imagesStagedBktName)).Put([]byte(id), img); err != nil {
 			return errors.Wrapf(err, "can't put to bucket with %s", id)
 		}
 		tsBuf := &bytes.Buffer{}
-		if err = binary.Write(tsBuf, binary.LittleEndian, time.Now().UnixNano()); err != nil {
+		if err := binary.Write(tsBuf, binary.LittleEndian, time.Now().UnixNano()); err != nil {
 			return errors.Wrapf(err, "can't serialize timestamp for %s", id)
 		}
-		if err = tx.Bucket([]byte(insertTimeBktName)).Put([]byte(id), tsBuf.Bytes()); err != nil {
+		if err := tx.Bucket([]byte(insertTimeBktName)).Put([]byte(id), tsBuf.Bytes()); err != nil {
 			return errors.Wrapf(err, "can't put to bucket with %s", id)
 		}
-		return err
+		return nil
 	})
 
-	return id, err
-}
-
-// Save data from reader to staging bucket in DB
-func (b *Bolt) Save(_ string, userID string, r io.Reader) (id string, err error) {
-	id = path.Join(userID, guid())
-	return b.SaveWithID(id, r)
+	return err
 }
 
 // Commit file stored in staging bucket by copying it to permanent bucket
-// Data from staging bucket not removed immediately, but would be removed on cleanup
-func (b *Bolt) commit(id string) error {
+// Data from staging bucket not removed immediately, but would be removed on Cleanup
+func (b *Bolt) Commit(id string) error {
 	err := b.db.Update(func(tx *bolt.Tx) error {
 		data := tx.Bucket([]byte(imagesStagedBktName)).Get([]byte(id))
 		if data == nil {
@@ -107,31 +85,31 @@ func (b *Bolt) commit(id string) error {
 }
 
 // Load image from DB
-// returns ReadCloser and caller should call close after processing completed.
-func (b *Bolt) Load(id string) (io.ReadCloser, int64, error) {
-	buf := &bytes.Buffer{}
-	var size int = 0
+func (b *Bolt) Load(id string) ([]byte, error) {
+	var data []byte
 	err := b.db.View(func(tx *bolt.Tx) error {
-		data := tx.Bucket([]byte(imagesBktName)).Get([]byte(id))
+		data = tx.Bucket([]byte(imagesBktName)).Get([]byte(id))
 		if data == nil {
 			data = tx.Bucket([]byte(imagesStagedBktName)).Get([]byte(id))
 		}
 		if data == nil {
 			return errors.Errorf("can't load image %s", id)
 		}
-		var err error
-		size, err = buf.Write(data)
-		return errors.Wrapf(err, "failed to write for %s", id)
+		return nil
 	})
-	return ioutil.NopCloser(buf), int64(size), err
+	if err != nil {
+		// separate error handler to return nil and not empty []byte
+		return nil, err
+	}
+	return data, nil
 }
 
 // Cleanup runs scan of staging and removes old data based on ttl
-func (b *Bolt) cleanup(_ context.Context, ttl time.Duration) error {
+func (b *Bolt) Cleanup(_ context.Context, ttl time.Duration) error {
 	err := b.db.Update(func(tx *bolt.Tx) error {
 		c := tx.Bucket([]byte(insertTimeBktName)).Cursor()
 
-		idsToRemove := [][]byte{}
+		var idsToRemove [][]byte
 
 		for id, tsData := c.First(); id != nil; id, tsData = c.Next() {
 			var ts int64
@@ -163,7 +141,25 @@ func (b *Bolt) cleanup(_ context.Context, ttl time.Duration) error {
 	return err
 }
 
-// SizeLimit returns max size of allowed image
-func (b *Bolt) SizeLimit() int {
-	return b.MaxSize
+// Info returns meta information about storage
+func (b *Bolt) Info() (StoreInfo, error) {
+	var ts time.Time
+	err := b.db.View(func(tx *bolt.Tx) error {
+		c := tx.Bucket([]byte(insertTimeBktName)).Cursor()
+
+		for id, tsData := c.First(); id != nil; id, tsData = c.Next() {
+			var createdRaw int64
+			err := binary.Read(bytes.NewReader(tsData), binary.LittleEndian, &createdRaw)
+			if err != nil {
+				return errors.Wrapf(err, "failed to deserialize timestamp for %s", id)
+			}
+
+			created := time.Unix(0, createdRaw)
+			if ts.IsZero() || created.Before(ts) {
+				ts = created
+			}
+		}
+		return nil
+	})
+	return StoreInfo{FirstStagingImageTS: ts}, errors.Wrapf(err, "problem retrieving first timestamp from staging images")
 }

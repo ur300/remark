@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -23,9 +24,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/umputun/remark/backend/app/notify"
-	"github.com/umputun/remark/backend/app/store"
-	"github.com/umputun/remark/backend/app/store/image"
+	"github.com/umputun/remark42/backend/app/notify"
+	"github.com/umputun/remark42/backend/app/store"
+	"github.com/umputun/remark42/backend/app/store/image"
 )
 
 // gopher png for test, from https://golang.org/src/image/png/example_test.go
@@ -71,6 +72,7 @@ func TestRest_CreateOldPost(t *testing.T) {
 	resp, err := post(t, ts.URL+"/api/v1/comment",
 		`{"text": "test 123", "locator":{"site": "remark42","url": "https://radio-t.com/blah1"}}`)
 	assert.NoError(t, err)
+	assert.NoError(t, resp.Body.Close())
 	assert.Equal(t, http.StatusCreated, resp.StatusCode)
 
 	assert.NoError(t, srv.DataService.DeleteAll("remark42"))
@@ -83,6 +85,7 @@ func TestRest_CreateOldPost(t *testing.T) {
 	resp, err = post(t, ts.URL+"/api/v1/comment",
 		`{"text": "test 123", "locator":{"site": "remark42","url": "https://radio-t.com/blah1"}}`)
 	assert.NoError(t, err)
+	assert.NoError(t, resp.Body.Close())
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 }
 
@@ -120,8 +123,8 @@ func TestRest_CreateWithRestrictedWord(t *testing.T) {
 	ts, _, teardown := startupT(t)
 	defer teardown()
 
-	badComment := fmt.Sprintf(`{"text": "What the duck is that?", "locator":{"url": "https://radio-t.com/blah1", 
-"site": "remark42"}}`)
+	badComment := `{"text": "What the duck is that?", "locator":{"url": "https://radio-t.com/blah1",
+"site": "remark42"}}`
 
 	resp, err := post(t, ts.URL+"/api/v1/comment", badComment)
 	assert.NoError(t, err)
@@ -144,6 +147,7 @@ func TestRest_CreateRejected(t *testing.T) {
 	// try to create without auth
 	resp, err := http.Post(ts.URL+"/api/v1/comment", "", strings.NewReader(body))
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, 401, resp.StatusCode)
 
 	// try with wrong aud
@@ -153,6 +157,7 @@ func TestRest_CreateRejected(t *testing.T) {
 	req.Header.Add("X-JWT", devTokenBadAud)
 	resp, err = client.Do(req)
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	require.Equal(t, http.StatusForbidden, resp.StatusCode, "reject wrong aud")
 }
 
@@ -249,8 +254,8 @@ func TestRest_UpdateDelete(t *testing.T) {
 	j := []store.PostInfo{}
 	err = json.Unmarshal(bb, &j)
 	assert.NoError(t, err)
-	assert.Equal(t, []store.PostInfo([]store.PostInfo{{URL: "https://radio-t.com/blah1", Count: 1},
-		{URL: "https://radio-t.com/blah2", Count: 0}}), j)
+	assert.Equal(t, []store.PostInfo{{URL: "https://radio-t.com/blah1", Count: 1},
+		{URL: "https://radio-t.com/blah2", Count: 0}}, j)
 
 	// delete a comment
 	client := http.Client{}
@@ -290,8 +295,8 @@ func TestRest_UpdateDelete(t *testing.T) {
 	j = []store.PostInfo{}
 	err = json.Unmarshal(bb, &j)
 	require.NoError(t, err)
-	assert.Equal(t, []store.PostInfo([]store.PostInfo{{URL: "https://radio-t.com/blah1", Count: 0},
-		{URL: "https://radio-t.com/blah2", Count: 0}}), j)
+	assert.Equal(t, []store.PostInfo{{URL: "https://radio-t.com/blah1", Count: 0},
+		{URL: "https://radio-t.com/blah2", Count: 0}}, j)
 }
 
 func TestRest_UpdateNotOwner(t *testing.T) {
@@ -312,6 +317,7 @@ func TestRest_UpdateNotOwner(t *testing.T) {
 	assert.NoError(t, err)
 	body, err := ioutil.ReadAll(b.Body)
 	assert.NoError(t, err)
+	assert.NoError(t, b.Body.Close())
 	assert.Equal(t, 403, b.StatusCode, string(body), "update from non-owner")
 	assert.Equal(t, `{"code":3,"details":"can not edit comments for other users","error":"rejected"}`+"\n", string(body))
 
@@ -322,6 +328,7 @@ func TestRest_UpdateNotOwner(t *testing.T) {
 	req.Header.Add("X-JWT", devToken)
 	b, err = client.Do(req)
 	assert.NoError(t, err)
+	assert.NoError(t, b.Body.Close())
 	assert.Equal(t, 400, b.StatusCode, string(body), "update is not json")
 }
 
@@ -340,6 +347,7 @@ func TestRest_UpdateWrongAud(t *testing.T) {
 	req.Header.Add("X-JWT", devTokenBadAud)
 	b, err := client.Do(req)
 	assert.NoError(t, err)
+	assert.NoError(t, b.Body.Close())
 	assert.Equal(t, http.StatusForbidden, b.StatusCode, "reject update with wrong aut in jwt")
 }
 
@@ -388,6 +396,7 @@ func TestRest_Vote(t *testing.T) {
 		req.Header.Add("X-JWT", devToken)
 		resp, err := client.Do(req)
 		assert.NoError(t, err)
+		assert.NoError(t, resp.Body.Close())
 		return resp.StatusCode
 	}
 
@@ -472,6 +481,7 @@ func TestRest_AnonVote(t *testing.T) {
 		req.Header.Add("X-JWT", anonToken)
 		resp, err := client.Do(req)
 		assert.NoError(t, err)
+		assert.NoError(t, resp.Body.Close())
 		return resp.StatusCode
 	}
 
@@ -503,9 +513,17 @@ func TestRest_AnonVote(t *testing.T) {
 	assert.Equal(t, map[string]bool(nil), cr.Votes)
 }
 
+type MockFS struct{}
+
+func (fs *MockFS) ReadFile(path string) ([]byte, error) {
+	return []byte(fmt.Sprintf("template %s", path)), nil
+}
+
 func TestRest_Email(t *testing.T) {
 	ts, srv, teardown := startupT(t)
 	defer teardown()
+
+	srv.privRest.templates = &MockFS{}
 
 	// issue good token
 	claims := token.Claims{
@@ -548,6 +566,7 @@ func TestRest_Email(t *testing.T) {
 	}
 	client := http.Client{}
 	for _, x := range testData {
+		x := x
 		t.Run(x.description, func(t *testing.T) {
 			req, err := http.NewRequest(x.method, ts.URL+x.url, nil)
 			require.NoError(t, err)
@@ -577,6 +596,7 @@ func TestRest_EmailNotification(t *testing.T) {
 
 	mockDestination := &notify.MockDest{}
 	srv.privRest.notifyService = notify.NewService(srv.DataService, 1, mockDestination)
+	defer srv.privRest.notifyService.Close()
 
 	client := http.Client{}
 
@@ -592,15 +612,16 @@ func TestRest_EmailNotification(t *testing.T) {
 	assert.NoError(t, err)
 	body, err := ioutil.ReadAll(resp.Body)
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	require.Equal(t, http.StatusCreated, resp.StatusCode, string(body))
 	parentComment := store.Comment{}
 	require.NoError(t, render.DecodeJSON(strings.NewReader(string(body)), &parentComment))
 	// wait for mock notification Submit to kick off
-	time.Sleep(time.Millisecond * 5)
+	time.Sleep(time.Millisecond * 30)
 	require.Equal(t, 1, len(mockDestination.Get()))
-	assert.Equal(t, "", mockDestination.Get()[0].Email)
+	assert.Empty(t, mockDestination.Get()[0].Emails)
 
-	// create child comment from another user, no email notification expected
+	// create child comment from another user, email notification only to admin expected
 	req, err = http.NewRequest("POST", ts.URL+"/api/v1/comment", strings.NewReader(fmt.Sprintf(
 		`{"text": "test 456",
 	"pid": "%s",
@@ -608,16 +629,17 @@ func TestRest_EmailNotification(t *testing.T) {
 	"locator":{"url": "https://radio-t.com/blah1",
 	"site": "remark42"}}`, parentComment.ID)))
 	assert.NoError(t, err)
-	req.Header.Add("X-JWT", devToken)
+	req.Header.Add("X-JWT", anonToken)
 	resp, err = client.Do(req)
 	assert.NoError(t, err)
 	body, err = ioutil.ReadAll(resp.Body)
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	require.Equal(t, http.StatusCreated, resp.StatusCode, string(body))
 	// wait for mock notification Submit to kick off
-	time.Sleep(time.Millisecond * 5)
+	time.Sleep(time.Millisecond * 30)
 	require.Equal(t, 2, len(mockDestination.Get()))
-	assert.Empty(t, mockDestination.Get()[1].Email)
+	assert.Empty(t, mockDestination.Get()[1].Emails)
 
 	// send confirmation token for email
 	req, err = http.NewRequest(http.MethodPost, ts.URL+"/api/v1/email/subscribe?site=remark42&address=good@example.com", nil)
@@ -627,12 +649,13 @@ func TestRest_EmailNotification(t *testing.T) {
 	require.NoError(t, err)
 	body, err = ioutil.ReadAll(resp.Body)
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
 	// wait for mock notification Submit to kick off
-	time.Sleep(time.Millisecond * 5)
-	require.Equal(t, 3, len(mockDestination.Get()))
-	require.NotEmpty(t, mockDestination.Get()[2].Verification)
-	verificationToken := mockDestination.Get()[2].Verification.Token
+	time.Sleep(time.Millisecond * 30)
+	require.Equal(t, 1, len(mockDestination.GetVerify()))
+	assert.Equal(t, "good@example.com", mockDestination.GetVerify()[0].Email)
+	verificationToken := mockDestination.GetVerify()[0].Token
 
 	// verify email
 	req, err = http.NewRequest(http.MethodPost, ts.URL+fmt.Sprintf("/api/v1/email/confirm?site=remark42&tkn=%s", verificationToken), nil)
@@ -642,6 +665,7 @@ func TestRest_EmailNotification(t *testing.T) {
 	require.NoError(t, err)
 	body, err = ioutil.ReadAll(resp.Body)
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
 
 	// get user information to verify the subscription
@@ -652,6 +676,7 @@ func TestRest_EmailNotification(t *testing.T) {
 	require.NoError(t, err)
 	body, err = ioutil.ReadAll(resp.Body)
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
 	var user store.User
 	err = json.Unmarshal(body, &user)
@@ -667,16 +692,17 @@ func TestRest_EmailNotification(t *testing.T) {
 	"locator":{"url": "https://radio-t.com/blah1",
 	"site": "remark42"}}`, parentComment.ID)))
 	assert.NoError(t, err)
-	req.Header.Add("X-JWT", devToken)
+	req.Header.Add("X-JWT", anonToken)
 	resp, err = client.Do(req)
 	assert.NoError(t, err)
 	body, err = ioutil.ReadAll(resp.Body)
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	require.Equal(t, http.StatusCreated, resp.StatusCode, string(body))
 	// wait for mock notification Submit to kick off
-	time.Sleep(time.Millisecond * 5)
-	require.Equal(t, 4, len(mockDestination.Get()))
-	assert.Equal(t, "good@example.com", mockDestination.Get()[3].Email)
+	time.Sleep(time.Millisecond * 30)
+	require.Equal(t, 3, len(mockDestination.Get()))
+	assert.Equal(t, []string{"good@example.com"}, mockDestination.Get()[2].Emails)
 
 	// delete user's email
 	req, err = http.NewRequest(http.MethodDelete, ts.URL+"/api/v1/email?site=remark42", nil)
@@ -686,9 +712,10 @@ func TestRest_EmailNotification(t *testing.T) {
 	require.NoError(t, err)
 	body, err = ioutil.ReadAll(resp.Body)
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, http.StatusOK, resp.StatusCode, string(body))
 
-	// create child comment from another user, no email notification expected
+	// create child comment from another user, no email notification
 	req, err = http.NewRequest("POST", ts.URL+"/api/v1/comment", strings.NewReader(
 		`{"text": "test 321",
 	"user": {"name": "other_user"},
@@ -700,11 +727,12 @@ func TestRest_EmailNotification(t *testing.T) {
 	assert.NoError(t, err)
 	body, err = ioutil.ReadAll(resp.Body)
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	require.Equal(t, http.StatusCreated, resp.StatusCode, string(body))
 	// wait for mock notification Submit to kick off
-	time.Sleep(time.Millisecond * 5)
-	require.Equal(t, 5, len(mockDestination.Get()))
-	assert.Empty(t, mockDestination.Get()[4].Email)
+	time.Sleep(time.Millisecond * 30)
+	require.Equal(t, 4, len(mockDestination.Get()))
+	assert.Empty(t, mockDestination.Get()[3].Emails)
 }
 
 func TestRest_UserAllData(t *testing.T) {
@@ -714,11 +742,11 @@ func TestRest_UserAllData(t *testing.T) {
 	// write 3 comments
 	user := store.User{ID: "dev", Name: "user name 1"}
 	c1 := store.Comment{User: user, Text: "test test #1", Locator: store.Locator{SiteID: "remark42",
-		URL: "https://radio-t.com/blah1"}, Timestamp: time.Date(2018, 05, 27, 1, 14, 10, 0, time.Local)}
+		URL: "https://radio-t.com/blah1"}, Timestamp: time.Date(2018, 5, 27, 1, 14, 10, 0, time.Local)}
 	c2 := store.Comment{User: user, Text: "test test #2", ParentID: "p1", Locator: store.Locator{SiteID: "remark42",
-		URL: "https://radio-t.com/blah1"}, Timestamp: time.Date(2018, 05, 27, 1, 14, 20, 0, time.Local)}
+		URL: "https://radio-t.com/blah1"}, Timestamp: time.Date(2018, 5, 27, 1, 14, 20, 0, time.Local)}
 	c3 := store.Comment{User: user, Text: "test test #3", ParentID: "p1", Locator: store.Locator{SiteID: "remark42",
-		URL: "https://radio-t.com/blah1"}, Timestamp: time.Date(2018, 05, 27, 1, 14, 25, 0, time.Local)}
+		URL: "https://radio-t.com/blah1"}, Timestamp: time.Date(2018, 5, 27, 1, 14, 25, 0, time.Local)}
 	_, err := srv.DataService.Create(c1)
 	require.NoError(t, err, "%+v", err)
 	_, err = srv.DataService.Create(c2)
@@ -737,6 +765,7 @@ func TestRest_UserAllData(t *testing.T) {
 
 	ungzReader, err := gzip.NewReader(resp.Body)
 	assert.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	ungzBody, err := ioutil.ReadAll(ungzReader)
 	assert.NoError(t, err)
 	strUungzBody := string(ungzBody)
@@ -759,6 +788,7 @@ func TestRest_UserAllData(t *testing.T) {
 	require.NoError(t, err)
 	resp, err = client.Do(req)
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	require.Equal(t, 401, resp.StatusCode)
 }
 
@@ -768,7 +798,7 @@ func TestRest_UserAllDataManyComments(t *testing.T) {
 
 	user := store.User{ID: "dev", Name: "user name 1"}
 	c := store.Comment{User: user, Text: "test test #1", Locator: store.Locator{SiteID: "remark42",
-		URL: "https://radio-t.com/blah1"}, Timestamp: time.Date(2018, 05, 27, 1, 14, 10, 0, time.Local)}
+		URL: "https://radio-t.com/blah1"}, Timestamp: time.Date(2018, 5, 27, 1, 14, 10, 0, time.Local)}
 
 	for i := 0; i < 51; i++ {
 		c.ID = fmt.Sprintf("id-%03d", i)
@@ -807,6 +837,7 @@ func TestRest_DeleteMe(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 200, resp.StatusCode)
 	body, err := ioutil.ReadAll(resp.Body)
+	assert.NoError(t, resp.Body.Close())
 	assert.NoError(t, err)
 
 	m := map[string]string{}
@@ -815,17 +846,18 @@ func TestRest_DeleteMe(t *testing.T) {
 	assert.Equal(t, "remark42", m["site"])
 	assert.Equal(t, "dev", m["user_id"])
 
-	token := m["token"]
-	claims, err := srv.Authenticator.TokenService().Parse(token)
+	tkn := m["token"]
+	claims, err := srv.Authenticator.TokenService().Parse(tkn)
 	assert.NoError(t, err)
 	assert.Equal(t, "dev", claims.User.ID)
-	assert.Equal(t, "https://demo.remark42.com/web/deleteme.html?token="+token, m["link"])
+	assert.Equal(t, "https://demo.remark42.com/web/deleteme.html?token="+tkn, m["link"])
 
 	req, err = http.NewRequest(http.MethodPost, fmt.Sprintf("%s/api/v1/deleteme?site=remark42", ts.URL), nil)
 	assert.NoError(t, err)
 	resp, err = client.Do(req)
 	assert.NoError(t, err)
 	assert.Equal(t, 401, resp.StatusCode)
+	assert.NoError(t, resp.Body.Close())
 }
 
 func TestRest_SavePictureCtrl(t *testing.T) {
@@ -853,6 +885,7 @@ func TestRest_SavePictureCtrl(t *testing.T) {
 		assert.Equal(t, 200, resp.StatusCode)
 		body, err := ioutil.ReadAll(resp.Body)
 		require.NoError(t, err)
+		require.NoError(t, resp.Body.Close())
 
 		m := map[string]string{}
 		err = json.Unmarshal(body, &m)
@@ -867,29 +900,34 @@ func TestRest_SavePictureCtrl(t *testing.T) {
 	assert.Equal(t, 200, resp.StatusCode)
 	body, err := ioutil.ReadAll(resp.Body)
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, 1462, len(body))
-	assert.Equal(t, "image/*", resp.Header.Get("Content-Type"))
+	assert.Equal(t, "image/png", resp.Header.Get("Content-Type"))
 
 	id = savePic("picture.gif")
 	resp, err = http.Get(fmt.Sprintf("%s/api/v1/picture/%s", ts.URL, id))
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, 200, resp.StatusCode)
-	assert.Equal(t, "image/*", resp.Header.Get("Content-Type"))
+	assert.Equal(t, "image/png", resp.Header.Get("Content-Type"))
 
 	id = savePic("picture.jpg")
 	resp, err = http.Get(fmt.Sprintf("%s/api/v1/picture/%s", ts.URL, id))
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, 200, resp.StatusCode)
-	assert.Equal(t, "image/*", resp.Header.Get("Content-Type"))
+	assert.Equal(t, "image/png", resp.Header.Get("Content-Type"))
 
 	id = savePic("picture.blah")
 	resp, err = http.Get(fmt.Sprintf("%s/api/v1/picture/%s", ts.URL, id))
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, 200, resp.StatusCode)
-	assert.Equal(t, "image/*", resp.Header.Get("Content-Type"))
+	assert.Equal(t, "image/png", resp.Header.Get("Content-Type"))
 
 	resp, err = http.Get(fmt.Sprintf("%s/api/v1/picture/blah/pic.blah", ts.URL))
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, 400, resp.StatusCode)
 }
 
@@ -901,13 +939,14 @@ func TestRest_CreateWithPictures(t *testing.T) {
 	}()
 	lgr.Setup(lgr.Debug, lgr.CallerFile, lgr.CallerFunc)
 
-	imageService := svc.ImageService
-	imageService.Store = &image.FileSystem{
+	imageService := image.NewService(&image.FileSystem{
 		Staging:  "/tmp/remark42/images.staging",
 		Location: "/tmp/remark42/images",
-		MaxSize:  2000,
-	}
-	imageService.TTL = 100 * time.Millisecond
+	}, image.ServiceParams{
+		EditDuration: 100 * time.Millisecond,
+		MaxSize:      2000,
+	})
+	defer imageService.Close(context.Background())
 
 	svc.privRest.imageService = imageService
 	svc.ImageService = imageService

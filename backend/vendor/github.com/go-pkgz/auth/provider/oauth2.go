@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	jwt "github.com/dgrijalva/jwt-go"
+	"github.com/dgrijalva/jwt-go"
 	"github.com/go-pkgz/rest"
 	"golang.org/x/oauth2"
 
@@ -178,7 +178,7 @@ func (p Oauth2Handler) AuthHandler(w http.ResponseWriter, r *http.Request) {
 	p.Logf("[DEBUG] got raw user info %+v", jData)
 
 	u := p.mapUser(jData, data)
-	u, err = setAvatar(p.AvatarSaver, u)
+	u, err = setAvatar(p.AvatarSaver, u, client)
 	if err != nil {
 		rest.SendErrorJSON(w, r, p.L, http.StatusInternalServerError, err, "failed to save avatar to proxy")
 		return

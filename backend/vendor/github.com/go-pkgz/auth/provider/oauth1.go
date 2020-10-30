@@ -10,9 +10,10 @@ import (
 
 	"github.com/dghubble/oauth1"
 	"github.com/dgrijalva/jwt-go"
+	"github.com/go-pkgz/rest"
+
 	"github.com/go-pkgz/auth/logger"
 	"github.com/go-pkgz/auth/token"
-	"github.com/go-pkgz/rest"
 )
 
 // Oauth1Handler implements /login, /callback and /logout handlers for oauth1 flow
@@ -126,7 +127,7 @@ func (h Oauth1Handler) AuthHandler(w http.ResponseWriter, r *http.Request) {
 	h.Logf("[DEBUG] got raw user info %+v", jData)
 
 	u := h.mapUser(jData, data)
-	u, err = setAvatar(h.AvatarSaver, u)
+	u, err = setAvatar(h.AvatarSaver, u, &http.Client{Timeout: 5 * time.Second})
 	if err != nil {
 		rest.SendErrorJSON(w, r, h.L, http.StatusInternalServerError, err, "failed to save avatar to proxy")
 		return

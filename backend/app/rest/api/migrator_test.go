@@ -17,8 +17,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/umputun/remark/backend/app/store"
-	"github.com/umputun/remark/backend/app/store/service"
+	"github.com/umputun/remark42/backend/app/store"
+	"github.com/umputun/remark42/backend/app/store/service"
 )
 
 func TestMigrator_Import(t *testing.T) {
@@ -124,6 +124,7 @@ func TestMigrator_ImportRejected(t *testing.T) {
 	assert.NoError(t, err)
 	resp, err := client.Do(req)
 	assert.NoError(t, err)
+	assert.NoError(t, resp.Body.Close())
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
 
@@ -147,6 +148,7 @@ func TestMigrator_ImportDouble(t *testing.T) {
 	assert.NoError(t, err)
 	resp, err := client.Do(req)
 	assert.NoError(t, err)
+	assert.NoError(t, resp.Body.Close())
 	assert.Equal(t, http.StatusAccepted, resp.StatusCode)
 
 	client = &http.Client{Timeout: 5 * time.Second}
@@ -156,6 +158,7 @@ func TestMigrator_ImportDouble(t *testing.T) {
 	assert.NoError(t, err)
 	resp, err = client.Do(req)
 	assert.NoError(t, err)
+	assert.NoError(t, resp.Body.Close())
 	assert.Equal(t, http.StatusConflict, resp.StatusCode)
 	waitForMigrationCompletion(t, ts)
 }
@@ -181,6 +184,7 @@ func TestMigrator_ImportWaitExpired(t *testing.T) {
 	require.NoError(t, err)
 	resp, err := client.Do(req)
 	assert.NoError(t, err)
+	assert.NoError(t, resp.Body.Close())
 	assert.Equal(t, http.StatusAccepted, resp.StatusCode)
 
 	client = &http.Client{Timeout: 5 * time.Second}
@@ -190,6 +194,7 @@ func TestMigrator_ImportWaitExpired(t *testing.T) {
 	assert.NoError(t, err)
 	resp, err = client.Do(req)
 	assert.NoError(t, err)
+	assert.NoError(t, resp.Body.Close())
 	assert.Equal(t, http.StatusGatewayTimeout, resp.StatusCode)
 
 	waitForMigrationCompletion(t, ts)
@@ -215,6 +220,7 @@ func TestMigrator_Export(t *testing.T) {
 	req.SetBasicAuth("admin", "password")
 	resp, err := client.Do(req)
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	require.Equal(t, http.StatusAccepted, resp.StatusCode)
 	waitForMigrationCompletion(t, ts)
 
@@ -231,6 +237,7 @@ func TestMigrator_Export(t *testing.T) {
 	assert.NoError(t, err)
 	ungzBody, err := ioutil.ReadAll(ungzReader)
 	assert.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, 3, strings.Count(string(ungzBody), "\n"))
 	assert.Equal(t, 2, strings.Count(string(ungzBody), "\"text\""))
 	t.Logf("%s", string(ungzBody))
@@ -246,6 +253,7 @@ func TestMigrator_Export(t *testing.T) {
 
 	body, err := ioutil.ReadAll(resp.Body)
 	assert.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, 3, strings.Count(string(body), "\n"))
 	assert.Equal(t, 2, strings.Count(string(body), "\"text\""))
 	t.Logf("%s", string(body))
@@ -254,6 +262,7 @@ func TestMigrator_Export(t *testing.T) {
 	require.NoError(t, err)
 	resp, err = client.Do(req)
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
 
@@ -305,6 +314,7 @@ func TestMigrator_Remap(t *testing.T) {
 	rules := "https://remark42.com/* https://www.remark42.com/*"
 	resp, err := post(t, ts.URL+"/api/v1/admin/remap?site=remark42", rules) // auth as admin
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	require.Equal(t, http.StatusAccepted, resp.StatusCode)
 	waitForMigrationCompletion(t, ts)
 
@@ -352,6 +362,7 @@ func TestMigrator_RemapReject(t *testing.T) {
 	require.NoError(t, err)
 	resp, err := client.Do(req)
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
 
@@ -458,7 +469,7 @@ var xmlTestWP = `
 		<category domain="post_tag" nicename="alts"><![CDATA[alts]]></category>
 		<category domain="post_tag" nicename="role-playing"><![CDATA[role playing]]></category>
 		<category domain="category" nicename="stuff"><![CDATA[Stuff]]></category>
-		<category domain="post_tag" nicename="wierd-in-a-cant-quite-help-myself-way"><![CDATA[wierd in a can't quite help myself way]]></category>
+		<category domain="post_tag" nicename="weird-in-a-cant-quite-help-myself-way"><![CDATA[weird in a can't quite help myself way]]></category>
 		<wp:postmeta>
 			<wp:meta_key><![CDATA[_edit_last]]></wp:meta_key>
 			<wp:meta_value><![CDATA[2]]></wp:meta_value>

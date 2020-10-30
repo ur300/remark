@@ -13,9 +13,9 @@ import (
 	log "github.com/go-pkgz/lgr"
 	R "github.com/go-pkgz/rest"
 
-	"github.com/umputun/remark/backend/app/rest"
-	"github.com/umputun/remark/backend/app/store"
-	"github.com/umputun/remark/backend/app/store/engine"
+	"github.com/umputun/remark42/backend/app/rest"
+	"github.com/umputun/remark42/backend/app/store"
+	"github.com/umputun/remark42/backend/app/store/engine"
 )
 
 // admin provides router for all requests available for admin users only
@@ -111,7 +111,7 @@ func (a *admin) deleteMeRequestCtrl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := a.dataService.DeleteUserDetail(claims.Audience, claims.User.ID, engine.UserEmail); err != nil {
+	if err = a.dataService.DeleteUserDetail(claims.Audience, claims.User.ID, engine.UserEmail); err != nil {
 		code := parseError(err, rest.ErrInternal)
 		rest.SendErrorJSON(w, r, http.StatusBadRequest, err, "can't delete email for user", code)
 		return

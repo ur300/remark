@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/didip/tollbooth"
+	"github.com/didip/tollbooth/v6"
 	"github.com/didip/tollbooth_chi"
 	"github.com/go-chi/chi"
 	"github.com/go-chi/chi/middleware"
@@ -25,12 +25,13 @@ import (
 	"github.com/pkg/errors"
 	"github.com/rakyll/statik/fs"
 
-	"github.com/umputun/remark/backend/app/notify"
-	"github.com/umputun/remark/backend/app/rest"
-	"github.com/umputun/remark/backend/app/rest/proxy"
-	"github.com/umputun/remark/backend/app/store"
-	"github.com/umputun/remark/backend/app/store/image"
-	"github.com/umputun/remark/backend/app/store/service"
+	"github.com/umputun/remark42/backend/app/notify"
+	"github.com/umputun/remark42/backend/app/rest"
+	"github.com/umputun/remark42/backend/app/rest/proxy"
+	"github.com/umputun/remark42/backend/app/store"
+	"github.com/umputun/remark42/backend/app/store/image"
+	"github.com/umputun/remark42/backend/app/store/service"
+	"github.com/umputun/remark42/backend/app/templates"
 )
 
 // Rest is a rest access server
@@ -60,6 +61,7 @@ type Rest struct {
 	EmailNotifications bool
 	EmojiEnabled       bool
 	SimpleView         bool
+	ProxyCORS          bool
 
 	SSLConfig   SSLConfig
 	httpsServer *http.Server
@@ -76,6 +78,7 @@ type Rest struct {
 type LoadingCache interface {
 	Get(key lcw.Key, fn func() ([]byte, error)) (data []byte, err error) // load from cache if found or put to cache and return
 	Flush(req lcw.FlusherRequest)                                        // evict matched records
+	Close() error
 }
 
 const hardBodyLimit = 1024 * 64 // limit size of body
@@ -184,15 +187,19 @@ func (s *Rest) routes() chi.Router {
 
 	s.pubRest, s.privRest, s.adminRest, s.rssRest = s.controllerGroups() // assign controllers for groups
 
-	corsMiddleware := cors.New(cors.Options{
-		AllowedOrigins:   []string{"*"},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-XSRF-Token", "X-JWT"},
-		ExposedHeaders:   []string{"Authorization"},
-		AllowCredentials: true,
-		MaxAge:           300,
-	})
-	router.Use(corsMiddleware.Handler)
+	if s.ProxyCORS {
+		log.Printf("[WARN] internal CORS disabled")
+	} else {
+		corsMiddleware := cors.New(cors.Options{
+			AllowedOrigins:   []string{"*"},
+			AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+			AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-XSRF-Token", "X-JWT"},
+			ExposedHeaders:   []string{"Authorization"},
+			AllowCredentials: true,
+			MaxAge:           300,
+		})
+		router.Use(corsMiddleware.Handler)
+	}
 
 	ipFn := func(ip string) string { return store.HashValue(ip, s.SharedSecret)[:12] } // logger uses it for anonymization
 	logInfoWithBody := logger.New(logger.Log(log.Default()), logger.WithBody, logger.IPfn(ipFn), logger.Prefix("[INFO]")).Handler
@@ -201,7 +208,7 @@ func (s *Rest) routes() chi.Router {
 
 	router.Group(func(r chi.Router) {
 		r.Use(middleware.Timeout(5 * time.Second))
-		r.Use(logInfoWithBody, tollbooth_chi.LimitHandler(tollbooth.NewLimiter(5, nil)), middleware.NoCache)
+		r.Use(logInfoWithBody, tollbooth_chi.LimitHandler(tollbooth.NewLimiter(10, nil)), middleware.NoCache)
 		r.Mount("/auth", authHandler)
 	})
 
@@ -304,8 +311,7 @@ func (s *Rest) routes() chi.Router {
 			rauth.Use(middleware.Timeout(10 * time.Second))
 			rauth.Use(tollbooth_chi.LimitHandler(tollbooth.NewLimiter(s.updateLimiter(), nil)))
 			rauth.Use(authMiddleware.Auth, matchSiteID)
-			rauth.Use(middleware.NoCache)
-			rauth.Use(logger.New(logger.Log(log.Default()), logger.WithBody, logger.Prefix("[DEBUG]"), logger.IPfn(ipFn)).Handler)
+			rauth.Use(middleware.NoCache, logInfoWithBody)
 
 			rauth.Put("/comment/{id}", s.privRest.updateCommentCtrl)
 			rauth.Post("/comment", s.privRest.createCommentCtrl)
@@ -365,6 +371,7 @@ func (s *Rest) controllerGroups() (public, private, admin, rss) {
 		notifyService:    s.NotifyService,
 		remarkURL:        s.RemarkURL,
 		anonVote:         s.AnonVote,
+		templates:        templates.NewFS(),
 	}
 
 	admGrp := admin{
@@ -425,7 +432,7 @@ func (s *Rest) configCtrl(w http.ResponseWriter, r *http.Request) {
 		CriticalScore:      s.ScoreThresholds.Critical,
 		PositiveScore:      s.DataService.PositiveScore,
 		ReadOnlyAge:        s.ReadOnlyAge,
-		MaxImageSize:       s.ImageService.Store.SizeLimit(),
+		MaxImageSize:       s.ImageService.MaxSize,
 		EmailNotifications: s.EmailNotifications,
 		EmojiEnabled:       s.EmojiEnabled,
 		AnonVote:           s.AnonVote,
@@ -462,7 +469,7 @@ func addFileServer(r chi.Router, path string, root http.FileSystem, version stri
 	origPath := path
 	webFS = http.StripPrefix(path, webFS)
 	if path != "/" && path[len(path)-1] != '/' {
-		r.Get(path, http.RedirectHandler(path+"/", 301).ServeHTTP)
+		r.Get(path, http.RedirectHandler(path+"/", http.StatusMovedPermanently).ServeHTTP)
 		path += "/"
 	}
 	path += "*"

@@ -17,7 +17,8 @@ import (
 
 	"github.com/dgrijalva/jwt-go"
 	"github.com/go-pkgz/auth/token"
-	"github.com/jessevdk/go-flags"
+	"github.com/umputun/go-flags"
+	"go.uber.org/goleak"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -80,10 +81,10 @@ func TestServerApp_DevMode(t *testing.T) {
 	// send ping
 	resp, err := http.Get(fmt.Sprintf("http://localhost:%d/api/v1/ping", port))
 	require.NoError(t, err)
-	defer resp.Body.Close()
 	assert.Equal(t, 200, resp.StatusCode)
 	body, err := ioutil.ReadAll(resp.Body)
 	assert.NoError(t, err)
+	assert.NoError(t, resp.Body.Close())
 	assert.Equal(t, "pong", string(body))
 
 	cancel()
@@ -114,25 +115,97 @@ func TestServerApp_AnonMode(t *testing.T) {
 	assert.Equal(t, "pong", string(body))
 
 	// try to login with good name
-	resp, err = http.Get(fmt.Sprintf("http://localhost:%d/auth/anonymous/login?user=blah123&aud=remark42", port))
+	resp, err = http.Get(fmt.Sprintf("http://localhost:%d/auth/anonymous/login?user=blah123&aud=remark", port))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// try to add a comment as good anonymous
+	client := http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("POST", fmt.Sprintf("http://localhost:%d/api/v1/comment", port),
+		strings.NewReader(`{"text": "test 123", "locator":{"url": "https://radio-t.com/blah1", "site": "remark"}}`))
+	require.NoError(t, err)
+
+	tkn, claims := getAuthFromCookie(t, app, resp)
+	require.NotEmpty(t, tkn)
+	req.Header.Add("X-JWT", tkn)
+	resp, err = client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	// try to login with non-latin name
+	resp, err = http.Get(fmt.Sprintf("http://localhost:%d/auth/anonymous/login?user=Раз_Два%20%20Три_34567&aud=remark", port))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	// try to login with bad name
-	resp, err = http.Get(fmt.Sprintf("http://localhost:%d/auth/anonymous/login?user=**blah123&aud=remark42", port))
+	resp, err = http.Get(fmt.Sprintf("http://localhost:%d/auth/anonymous/login?user=**blah123&aud=remark", port))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 
 	// try to login with short name
-	resp, err = http.Get(fmt.Sprintf("http://localhost:%d/auth/anonymous/login?user=bl%20%20&aud=remark42", port))
+	resp, err = http.Get(fmt.Sprintf("http://localhost:%d/auth/anonymous/login?user=bl%%20%%20&aud=remark", port))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 
+	// try to login with name what have space in prefix
+	resp, err = http.Get(fmt.Sprintf("http://localhost:%d/auth/anonymous/login?user=%%20somebody&aud=remark", port))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+
+	// try to login with name what have space in suffix
+	resp, err = http.Get(fmt.Sprintf("http://localhost:%d/auth/anonymous/login?user=somebody%%20&aud=remark", port))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+
+	// try to login with long name
+	ln := strings.Repeat("x", 65)
+	resp, err = http.Get(fmt.Sprintf("http://localhost:%d/auth/anonymous/login?user=%s&aud=remark", port, ln))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+
+	// try to login with admin name
+	resp, err = http.Get(fmt.Sprintf("http://localhost:%d/auth/anonymous/login?user=umpUtun&aud=remark", port))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// try to add a comment as anonymous with admin name
+	client = http.Client{Timeout: 10 * time.Second}
+	req, err = http.NewRequest("POST", fmt.Sprintf("http://localhost:%d/api/v1/comment", port),
+		strings.NewReader(`{"text": "test 123", "locator":{"url": "https://radio-t.com/blah1", "site": "remark"}}`))
+	require.NoError(t, err)
+
+	tkn, claims = getAuthFromCookie(t, app, resp)
+	require.NotEmpty(t, tkn)
+	assert.True(t, claims.User.BoolAttr("blocked"), "should be blocked")
+	req.Header.Add("X-JWT", tkn)
+	resp, err = client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+
 	cancel()
 	app.Wait()
+}
+
+func getAuthFromCookie(t *testing.T, app *serverApp, resp *http.Response) (tkn string, claims token.Claims) {
+	var err error
+	for _, c := range resp.Cookies() {
+		if c.Name == "JWT" {
+			tkn = c.Value
+			claims, err = app.restSrv.Authenticator.TokenService().Parse(c.Value)
+			require.NoError(t, err)
+		}
+	}
+	return tkn, claims
 }
 
 func TestServerApp_WithSSL(t *testing.T) {
@@ -245,7 +318,7 @@ func TestServerApp_Failed(t *testing.T) {
 	_, err = p.ParseArgs([]string{"--store.bolt.path=/tmp", "--backup=/dev/null/not-writable"})
 	assert.NoError(t, err)
 	_, err = opts.newServerApp()
-	assert.EqualError(t, err, "can't make directory /dev/null/not-writable: mkdir /dev/null: not a directory")
+	assert.EqualError(t, err, "failed to create backup store: can't make directory /dev/null/not-writable: mkdir /dev/null: not a directory")
 	t.Log(err)
 
 	// invalid url
@@ -267,6 +340,19 @@ func TestServerApp_Failed(t *testing.T) {
 	opts.Store.Type = "blah"
 	_, err = opts.newServerApp()
 	assert.EqualError(t, err, "failed to make data store engine: unsupported store type blah")
+	t.Log(err)
+
+	// wrong redis location
+	opts = ServerCommand{}
+	opts.SetCommon(CommonOpts{RemarkURL: "https://demo.remark42.com", SharedSecret: "123456"})
+	p = flags.NewParser(&opts, flags.Default)
+	_, err = p.ParseArgs([]string{"--store.bolt.path=/tmp", "--cache.type=redis_pub_sub", "--cache.redis_addr=wrong_address"})
+	assert.NoError(t, err)
+	_, err = opts.newServerApp()
+	assert.EqualError(t, err,
+		"failed to make cache: cache backend initialization, redis PubSub initialisation: "+
+			"problem subscribing to channel remark42-cache on address wrong_address: "+
+			"dial tcp: address wrong_address: missing port in address")
 	t.Log(err)
 }
 
@@ -325,6 +411,7 @@ func TestServerApp_DeprecatedArgs(t *testing.T) {
 		"--auth.email.user=test_user",
 		"--auth.email.passwd=test_password",
 		"--auth.email.timeout=15s",
+		"--auth.email.template=file.tmpl",
 	}
 	assert.Empty(t, s.SMTP.Host)
 	assert.Empty(t, s.SMTP.Port)
@@ -343,6 +430,7 @@ func TestServerApp_DeprecatedArgs(t *testing.T) {
 			{Old: "auth.email.user", New: "smtp.username", RemoveVersion: "1.7.0"},
 			{Old: "auth.email.passwd", New: "smtp.password", RemoveVersion: "1.7.0"},
 			{Old: "auth.email.timeout", New: "smtp.timeout", RemoveVersion: "1.7.0"},
+			{Old: "auth.email.template", RemoveVersion: "1.9.0"},
 		},
 		deprecatedFlags)
 	assert.Equal(t, "smtp.example.org", s.SMTP.Host)
@@ -433,7 +521,7 @@ func TestServerAuthHooks(t *testing.T) {
 	req.Header.Set("X-JWT", tk)
 	resp, err := client.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, http.StatusCreated, resp.StatusCode, "non-blocked user able to post")
 
 	// add comment with no-aud claim
@@ -443,15 +531,15 @@ func TestServerAuthHooks(t *testing.T) {
 	require.NoError(t, err)
 	t.Logf("no-aud claims: %s", tkNoAud)
 	req, err = http.NewRequest("POST", fmt.Sprintf("http://localhost:%d/api/v1/comment", port),
-		strings.NewReader(`{"text": "test 123", "locator":{"url": "https://radio-t.com/p/2018/12/29/podcast-631/", 
-"site": "remark"}}`))
+		strings.NewReader(`{"text": "test 123", "locator":{"url": "https://radio-t.com/p/2018/12/29/podcast-631/",
+	"site": "remark"}}`))
 	require.NoError(t, err)
 	req.Header.Set("X-JWT", tkNoAud)
 	resp, err = client.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
 	body, err := ioutil.ReadAll(resp.Body)
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode, "user without aud claim rejected, \n"+tkNoAud+"\n"+string(body))
 
 	// block user dev as admin
@@ -461,10 +549,10 @@ func TestServerAuthHooks(t *testing.T) {
 	req.SetBasicAuth("admin", "password")
 	resp, err = client.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode, "user dev blocked")
 	b, err := ioutil.ReadAll(resp.Body)
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	t.Log(string(b))
 
 	// try add a comment with blocked user
@@ -474,29 +562,28 @@ func TestServerAuthHooks(t *testing.T) {
 	req.Header.Set("X-JWT", tk)
 	resp, err = client.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
 	body, err = ioutil.ReadAll(resp.Body)
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	assert.True(t, resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized,
 		"blocked user can't post, \n"+tk+"\n"+string(body))
 
 	cancel()
 	app.Wait()
+	client.CloseIdleConnections()
 }
 
 func TestServer_loadEmailTemplate(t *testing.T) {
 	cmd := ServerCommand{}
 	cmd.Auth.Email.MsgTemplate = "testdata/email.tmpl"
-	r := cmd.loadEmailTemplate()
+	r, err := cmd.loadEmailTemplate()
+	assert.NoError(t, err)
 	assert.Equal(t, "The token is {{.Token}}", r)
 
-	cmd.Auth.Email.MsgTemplate = ""
-	r = cmd.loadEmailTemplate()
-	assert.Contains(t, r, "Remark42</h1>")
-
-	cmd.Auth.Email.MsgTemplate = "bad-file"
-	r = cmd.loadEmailTemplate()
-	assert.Contains(t, r, "Remark42</h1>")
+	cmd.Auth.Email.MsgTemplate = "badpath.tmpl"
+	r, err = cmd.loadEmailTemplate()
+	assert.EqualError(t, err, "failed to read file badpath.tmpl: open badpath.tmpl: no such file or directory")
+	assert.Equal(t, r, "")
 }
 
 func chooseRandomUnusedPort() (port int) {
@@ -561,15 +648,25 @@ func prepServerApp(t *testing.T, fn func(o ServerCommand) ServerCommand) (*serve
 	cmd.SMTP.Password = "test_password"
 	cmd.SMTP.TimeOut = time.Second
 	cmd.UpdateLimit = 10
+	cmd.Admin.Type = "shared"
+	cmd.Admin.Shared.Admins = []string{"umputun", "bobuk"}
 	cmd = fn(cmd)
 
 	os.Remove(cmd.Store.Bolt.Path + "/remark.db")
 
-	// create app
+	return createAppFromCmd(t, cmd)
+}
+
+func createAppFromCmd(t *testing.T, cmd ServerCommand) (*serverApp, context.Context, context.CancelFunc) {
 	app, err := cmd.newServerApp()
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	rand.Seed(time.Now().UnixNano())
 	return app, ctx, cancel
+}
+
+func TestMain(m *testing.M) {
+	// ignore is added only for GitHub Actions, can't reproduce locally
+	goleak.VerifyTestMain(m, goleak.IgnoreTopFunction("net/http.(*Server).Shutdown"))
 }

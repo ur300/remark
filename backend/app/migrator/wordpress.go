@@ -9,7 +9,7 @@ import (
 	log "github.com/go-pkgz/lgr"
 	"github.com/pkg/errors"
 
-	"github.com/umputun/remark/backend/app/store"
+	"github.com/umputun/remark42/backend/app/store"
 )
 
 const wpTimeLayout = "2006-01-02 15:04:05"
@@ -61,8 +61,8 @@ func (w *WordPress) Convert(text string) string {
 // Import comments from WP and save to store
 func (w *WordPress) Import(r io.Reader, siteID string) (size int, err error) {
 
-	if err = w.DataStore.DeleteAll(siteID); err != nil {
-		return 0, err
+	if e := w.DataStore.DeleteAll(siteID); e != nil {
+		return 0, e
 	}
 
 	commentsCh := w.convert(r, siteID)
@@ -139,6 +139,7 @@ func (w *WordPress) convert(r io.Reader, siteID string) chan store.Comment {
 								Text:      comment.Content,
 								Timestamp: comment.Date.time,
 								ParentID:  comment.PID,
+								Imported:  true,
 							}
 							commentsCh <- commentFormatter.Format(c)
 							stats.inpComments++

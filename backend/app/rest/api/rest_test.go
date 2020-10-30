@@ -17,25 +17,25 @@ import (
 	"testing"
 	"time"
 
-	bolt "github.com/coreos/bbolt"
 	"github.com/go-pkgz/auth"
 	"github.com/go-pkgz/auth/avatar"
 	"github.com/go-pkgz/auth/token"
 	cache "github.com/go-pkgz/lcw"
-	log "github.com/go-pkgz/lgr"
 	R "github.com/go-pkgz/rest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	bolt "go.etcd.io/bbolt"
+	"go.uber.org/goleak"
 
-	"github.com/umputun/remark/backend/app/migrator"
-	"github.com/umputun/remark/backend/app/notify"
-	"github.com/umputun/remark/backend/app/rest"
-	"github.com/umputun/remark/backend/app/rest/proxy"
-	"github.com/umputun/remark/backend/app/store"
-	adminstore "github.com/umputun/remark/backend/app/store/admin"
-	"github.com/umputun/remark/backend/app/store/engine"
-	"github.com/umputun/remark/backend/app/store/image"
-	"github.com/umputun/remark/backend/app/store/service"
+	"github.com/umputun/remark42/backend/app/migrator"
+	"github.com/umputun/remark42/backend/app/notify"
+	"github.com/umputun/remark42/backend/app/rest"
+	"github.com/umputun/remark42/backend/app/rest/proxy"
+	"github.com/umputun/remark42/backend/app/store"
+	adminstore "github.com/umputun/remark42/backend/app/store/admin"
+	"github.com/umputun/remark42/backend/app/store/engine"
+	"github.com/umputun/remark42/backend/app/store/image"
+	"github.com/umputun/remark42/backend/app/store/service"
 )
 
 var devToken = `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJyZW1hcms0MiIsImV4cCI6Mzc4OTE5MTgyMiwianRpIjoicmFuZG9tIGlkIiwiaXNzIjoicmVtYXJrNDIiLCJuYmYiOjE1MjE4ODQyMjIsInVzZXIiOnsibmFtZSI6ImRldmVsb3BlciBvbmUiLCJpZCI6ImRldiIsInBpY3R1cmUiOiJodHRwOi8vZXhhbXBsZS5jb20vcGljLnBuZyIsImlwIjoiMTI3LjAuMC4xIiwiZW1haWwiOiJtZUBleGFtcGxlLmNvbSJ9fQ.aKUAXiZxXypgV7m1wEOgUcyPOvUDXHDi3A06YWKbcLg`
@@ -50,12 +50,12 @@ func TestRest_FileServer(t *testing.T) {
 	ts, _, teardown := startupT(t)
 	defer teardown()
 
-	testHtmlName := "test-remark.html"
-	testHTMLFile := os.TempDir() + "/" + testHtmlName
+	testHTMLName := "test-remark.html"
+	testHTMLFile := os.TempDir() + "/" + testHTMLName
 	err := ioutil.WriteFile(testHTMLFile, []byte("some html"), 0700)
 	assert.NoError(t, err)
 
-	body, code := get(t, ts.URL+"/web/"+testHtmlName)
+	body, code := get(t, ts.URL+"/web/"+testHTMLName)
 	assert.Equal(t, 200, code)
 	assert.Equal(t, "some html", body)
 	_ = os.Remove(testHTMLFile)
@@ -100,11 +100,11 @@ func TestRest_Shutdown(t *testing.T) {
 func TestRest_filterComments(t *testing.T) {
 	user := store.User{ID: "user1", Name: "user name 1"}
 	c1 := store.Comment{User: user, Text: "test test #1", Locator: store.Locator{SiteID: "radio-t",
-		URL: "https://radio-t.com/blah1"}, Timestamp: time.Date(2018, 05, 27, 1, 14, 10, 0, time.Local)}
+		URL: "https://radio-t.com/blah1"}, Timestamp: time.Date(2018, 5, 27, 1, 14, 10, 0, time.Local)}
 	c2 := store.Comment{User: user, Text: "test test #2", ParentID: "p1", Locator: store.Locator{SiteID: "radio-t",
-		URL: "https://radio-t.com/blah1"}, Timestamp: time.Date(2018, 05, 27, 1, 14, 20, 0, time.Local)}
+		URL: "https://radio-t.com/blah1"}, Timestamp: time.Date(2018, 5, 27, 1, 14, 20, 0, time.Local)}
 	c3 := store.Comment{User: user, Text: "test test #3", ParentID: "p1", Locator: store.Locator{SiteID: "radio-t",
-		URL: "https://radio-t.com/blah1"}, Timestamp: time.Date(2018, 05, 27, 1, 14, 25, 0, time.Local)}
+		URL: "https://radio-t.com/blah1"}, Timestamp: time.Date(2018, 5, 27, 1, 14, 25, 0, time.Local)}
 
 	r := filterComments([]store.Comment{c1, c2, c3}, func(c store.Comment) bool {
 		return c.Text == "test test #1" || c.Text == "test test #3"
@@ -211,14 +211,17 @@ func TestRest_rejectAnonUser(t *testing.T) {
 
 	resp, err := http.Get(ts.URL)
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode, "use not logged in")
 
 	resp, err = http.Get(ts.URL + "?fake_id=anonymous_user123&fake_name=test")
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode, "anon rejected")
 
 	resp, err = http.Get(ts.URL + "?fake_id=real_user123&fake_name=test")
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, http.StatusOK, resp.StatusCode, "real user")
 }
 
@@ -234,6 +237,7 @@ func Test_URLKey(t *testing.T) {
 	}
 
 	for i, tt := range tbl {
+		tt := tt
 		t.Run(strconv.Itoa(i), func(t *testing.T) {
 			r, err := http.NewRequest("GET", tt.url, nil)
 			require.NoError(t, err)
@@ -259,6 +263,7 @@ func Test_URLKeyWithUser(t *testing.T) {
 	}
 
 	for i, tt := range tbl {
+		tt := tt
 		t.Run(strconv.Itoa(i), func(t *testing.T) {
 			r, err := http.NewRequest("GET", tt.url, nil)
 			require.NoError(t, err)
@@ -286,6 +291,7 @@ func TestRest_parseError(t *testing.T) {
 	}
 
 	for n, tt := range tbl {
+		tt := tt
 		t.Run(strconv.Itoa(n), func(t *testing.T) {
 			res := parseError(tt.err, rest.ErrInternal)
 			assert.Equal(t, tt.res, res)
@@ -309,6 +315,7 @@ func TestRest_cacheControl(t *testing.T) {
 	}
 
 	for i, tt := range tbl {
+		tt := tt
 		t.Run(strconv.Itoa(i), func(t *testing.T) {
 			req := httptest.NewRequest("GET", tt.url, nil)
 			w := httptest.NewRecorder()
@@ -326,28 +333,31 @@ func TestRest_cacheControl(t *testing.T) {
 
 }
 
-func startupT(t *testing.T) (ts *httptest.Server, srv *Rest, teardown func()) {
-	log.Setup(log.CallerFile, log.CallerFunc, log.Msec, log.LevelBraces)
-
-	tmp := os.TempDir()
-	var testDb string
-	// pick a file name which is not in use for sure
+// randomPath pick a file or folder name which is not in use for sure
+func randomPath(tempDir, basename, suffix string) (string, error) {
 	for i := 0; i < 10; i++ {
-		testDb = fmt.Sprintf("/%s/test-remark-%d.db", tmp, rand.Int31())
-		_, err := os.Stat(testDb)
+		fname := fmt.Sprintf("/%s/%s-%d%s", tempDir, basename, rand.Int31(), suffix)
+		fmt.Printf("fname %q", fname)
+		_, err := os.Stat(fname)
 		if err != nil {
-			break
+			return fname, nil
 		}
 	}
+	return "", errors.New("cannot create temp file")
+}
+
+func startupT(t *testing.T) (ts *httptest.Server, srv *Rest, teardown func()) {
+	tmp := os.TempDir()
+	testDB, err := randomPath(tmp, "test-remark", ".db")
+	require.NoError(t, err)
+
 	_ = os.RemoveAll(tmp + "/ava-remark42")
 	_ = os.RemoveAll(tmp + "/pics-remark42")
 
-	b, err := engine.NewBoltDB(bolt.Options{}, engine.BoltSite{FileName: testDb, SiteID: "remark42"})
+	b, err := engine.NewBoltDB(bolt.Options{}, engine.BoltSite{FileName: testDB, SiteID: "remark42"})
 	require.NoError(t, err)
 
-	cacheBackend, err := cache.NewExpirableCache()
-	require.NoError(t, err)
-	memCache := cache.NewScache(cacheBackend)
+	memCache := cache.NewScache(cache.NewNopCache())
 
 	astore := adminstore.NewStaticStore("123456", []string{"remark42"}, []string{"a1", "a2"}, "admin@remark-42.com")
 	restrictedWordsMatcher := service.NewRestrictedWordsMatcher(service.StaticRestrictedWordsLister{Words: []string{"duck"}})
@@ -365,21 +375,20 @@ func startupT(t *testing.T) (ts *httptest.Server, srv *Rest, teardown func()) {
 		DataService: dataStore,
 		Authenticator: auth.NewService(auth.Opts{
 			AdminPasswd:  "password",
-			SecretReader: token.SecretFunc(func() (string, error) { return "secret", nil }),
+			SecretReader: token.SecretFunc(func(aud string) (string, error) { return "secret", nil }),
 			AvatarStore:  avatar.NewLocalFS(tmp + "/ava-remark42"),
 		}),
-		Cache:     memCache,
-		WebRoot:   tmp,
-		RemarkURL: "https://demo.remark42.com",
-		ImageService: &image.Service{
-			Store: &image.FileSystem{
-				Location:   tmp + "/pics-remark42",
-				Partitions: 100,
-				MaxSize:    10000,
-				Staging:    tmp + "/pics-remark42/staging",
-			},
-			TTL: time.Millisecond * 100,
-		},
+		Cache:      memCache,
+		WebRoot:    tmp,
+		RemarkURL:  "https://demo.remark42.com",
+		ImageService: image.NewService(&image.FileSystem{
+			Location:   tmp + "/pics-remark42",
+			Partitions: 100,
+			Staging:    tmp + "/pics-remark42/staging",
+		}, image.ServiceParams{
+			EditDuration: 100 * time.Millisecond,
+			MaxSize:      10000,
+		}),
 		ImageProxy:       &proxy.Image{},
 		ReadOnlyAge:      10,
 		CommentFormatter: store.NewCommentFormatter(&proxy.Image{}),
@@ -388,7 +397,7 @@ func startupT(t *testing.T) (ts *httptest.Server, srv *Rest, teardown func()) {
 			WordPressImporter: &migrator.WordPress{DataStore: dataStore},
 			NativeImporter:    &migrator.Native{DataStore: dataStore},
 			NativeExporter:    &migrator.Native{DataStore: dataStore},
-			UrlMapperMaker:    migrator.NewUrlMapper,
+			URLMapperMaker:    migrator.NewURLMapper,
 			Cache:             memCache,
 			KeyStore:          astore,
 		},
@@ -407,7 +416,7 @@ func startupT(t *testing.T) (ts *httptest.Server, srv *Rest, teardown func()) {
 	teardown = func() {
 		ts.Close()
 		require.NoError(t, srv.DataService.Close())
-		_ = os.Remove(testDb)
+		_ = os.Remove(testDB)
 		_ = os.RemoveAll(tmp + "/ava-remark42")
 		_ = os.RemoveAll(tmp + "/pics-remark42")
 	}
@@ -429,19 +438,19 @@ func fakeAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(fn)
 }
 
-func get(t *testing.T, url string) (string, int) {
+func get(t *testing.T, url string) (response string, statusCode int) {
 	r, err := http.Get(url)
 	require.NoError(t, err)
-	defer r.Body.Close()
 	body, err := ioutil.ReadAll(r.Body)
 	require.NoError(t, err)
+	require.NoError(t, r.Body.Close())
 	return string(body), r.StatusCode
 }
 
-func sendReq(_ *testing.T, r *http.Request, token string) (*http.Response, error) {
+func sendReq(_ *testing.T, r *http.Request, tkn string) (*http.Response, error) {
 	client := http.Client{Timeout: 5 * time.Second}
-	if token != "" {
-		r.Header.Set("X-JWT", token)
+	if tkn != "" {
+		r.Header.Set("X-JWT", tkn)
 	}
 	return client.Do(r)
 }
@@ -453,25 +462,25 @@ func getWithDevAuth(t *testing.T, url string) (body string, code int) {
 	req.Header.Add("X-JWT", devToken)
 	r, err := client.Do(req)
 	require.NoError(t, err)
-	defer r.Body.Close()
 	b, err := ioutil.ReadAll(r.Body)
 	assert.NoError(t, err)
+	require.NoError(t, r.Body.Close())
 	return string(b), r.StatusCode
 }
 
-func getWithAdminAuth(t *testing.T, url string) (string, int) {
+func getWithAdminAuth(t *testing.T, url string) (response string, statusCode int) {
 	client := &http.Client{Timeout: 5 * time.Second}
 	req, err := http.NewRequest("GET", url, nil)
 	require.NoError(t, err)
 	req.SetBasicAuth("admin", "password")
 	r, err := client.Do(req)
 	require.NoError(t, err)
-	defer r.Body.Close()
 	body, err := ioutil.ReadAll(r.Body)
 	assert.NoError(t, err)
+	require.NoError(t, r.Body.Close())
 	return string(body), r.StatusCode
 }
-func post(t *testing.T, url string, body string) (*http.Response, error) {
+func post(t *testing.T, url, body string) (*http.Response, error) {
 	client := &http.Client{Timeout: 5 * time.Second}
 	req, err := http.NewRequest("POST", url, strings.NewReader(body))
 	assert.NoError(t, err)
@@ -491,6 +500,7 @@ func addComment(t *testing.T, c store.Comment, ts *httptest.Server) string {
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	b, err = ioutil.ReadAll(resp.Body)
+	require.NoError(t, resp.Body.Close())
 	require.NoError(t, err)
 
 	crResp := R.JSON{}
@@ -503,10 +513,12 @@ func addComment(t *testing.T, c store.Comment, ts *httptest.Server) string {
 func requireAdminOnly(t *testing.T, req *http.Request) {
 	resp, err := sendReq(t, req, "") // no-auth user
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, 401, resp.StatusCode)
 
 	resp, err = sendReq(t, req, devToken) // non-admin user
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, 403, resp.StatusCode)
 }
 
@@ -531,4 +543,8 @@ func waitForHTTPSServerStart(port int) {
 			break
 		}
 	}
+}
+
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
 }

@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/umputun/remark/backend/app/store/admin"
+	"github.com/umputun/remark42/backend/app/store/admin"
 )
 
 func TestMemAdmin_Get(t *testing.T) {
@@ -47,9 +47,11 @@ func TestMemAdmin_Get(t *testing.T) {
 
 	admins, err = ms.Admins("no-site-in-db")
 	assert.EqualError(t, err, "site no-site-in-db not found")
+	assert.Empty(t, admins)
 
 	email, err = ms.Email("no-site-in-db")
 	assert.EqualError(t, err, "site no-site-in-db not found")
+	assert.Empty(t, email)
 
 	enabled, err := ms.Enabled("site1")
 	assert.NoError(t, err)
@@ -61,6 +63,7 @@ func TestMemAdmin_Get(t *testing.T) {
 
 	enabled, err = ms.Enabled("no-site-in-db")
 	assert.EqualError(t, err, "site no-site-in-db not found")
+	assert.False(t, enabled)
 
 	err = ms.OnEvent("site1", admin.EvCreate)
 	assert.NoError(t, err)

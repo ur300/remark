@@ -1,10 +1,11 @@
-# remark42 [![Build Status](https://github.com/umputun/remark/workflows/build/badge.svg)](https://github.com/umputun/remark/actions) [![Go Report Card](https://goreportcard.com/badge/github.com/umputun/remark)](https://goreportcard.com/report/github.com/umputun/remark) [![Coverage Status](https://coveralls.io/repos/github/umputun/remark/badge.svg?branch=master)](https://coveralls.io/github/umputun/remark?branch=master)
+# remark42 [![Build Status](https://github.com/umputun/remark42/workflows/build/badge.svg)](https://github.com/umputun/remark42/actions) [![Go Report Card](https://goreportcard.com/badge/github.com/umputun/remark42)](https://goreportcard.com/report/github.com/umputun/remark42) [![Coverage Status](https://coveralls.io/repos/github/umputun/remark42/badge.svg?branch=master)](https://coveralls.io/github/umputun/remark42?branch=master) [![codecov](https://codecov.io/gh/umputun/remark42/branch/master/graph/badge.svg)](https://codecov.io/gh/umputun/remark42)
+
 
 
 
 Remark42 is a self-hosted, lightweight, and simple (yet functional) comment engine, which doesn't spy on users. It can be embedded into blogs, articles or any other place where readers add comments.
 
-* Social login via Google, Twitter, Facebook, GitHub and Yandex
+* Social login via Google, Twitter, Facebook, Microsoft, GitHub and Yandex
 * Login via email
 * Optional anonymous access
 * Multi-level nested comments with both tree and plain presentations
@@ -31,9 +32,9 @@ Remark42 is a self-hosted, lightweight, and simple (yet functional) comment engi
 <details><summary>Screenshots</summary>
 
 Comments example:
-![](https://github.com/umputun/remark/blob/master/screenshots/comments.png)
+![](https://github.com/umputun/remark42/blob/master/screenshots/comments.png)
 
-For admin screenshots see [Admin UI wiki](https://github.com/umputun/remark/wiki/Admin-UI)
+For admin screenshots see [Admin UI wiki](https://github.com/umputun/remark42/wiki/Admin-UI)
 </details>
 
 
@@ -42,7 +43,7 @@ For admin screenshots see [Admin UI wiki](https://github.com/umputun/remark/wiki
   - [Install](#install)
     - [Backend](#backend)
       - [With Docker](#with-docker)
-      - [Without docker](#without-docker)
+      - [Without Docker](#without-docker)
       - [Parameters](#parameters)
         - [Required parameters](#required-parameters)
       - [Quick installation test](#quick-installation-test)
@@ -89,15 +90,15 @@ _this is the recommended way to run remark42_
 
 * copy provided `docker-compose.yml` and customize for your needs
 * make sure you **don't keep** `ADMIN_PASSWD=something...` for any non-development deployments
-* pull prepared images from the docker hub and start - `docker-compose pull && docker-compose up -d`
+* pull prepared images from the DockerHub and start - `docker-compose pull && docker-compose up -d`
 * alternatively compile from the sources - `docker-compose build && docker-compose up -d`
 
-#### Without docker
+#### Without Docker
 
-* download archive for [stable release](https://github.com/umputun/remark/releases) or [development version](https://remark42.com/downloads)
+* download archive for [stable release](https://github.com/umputun/remark42/releases) or [development version](https://remark42.com/downloads)
 * unpack with `gunzip` (Linux, macOS) or with `zip` (Windows)
 * run as `remark42.{os}-{arch} server {parameters...}`, i.e. `remark42.linux-amd64 server --secret=12345 --url=http://127.0.0.1:8080`
-* alternatively compile from the sources - `make OS=[linux|darwin|windows] ARCH=[amd64,386,arm64,arm32]`
+* alternatively compile from the sources - `make OS=[linux|darwin|windows] ARCH=[amd64,386,arm64,arm]`
 
 #### Parameters
 
@@ -110,9 +111,11 @@ _this is the recommended way to run remark42_
 | store.bolt.path         | STORE_BOLT_PATH         | `./var`                  | path to data directory                          |
 | store.bolt.timeout      | STORE_BOLT_TIMEOUT      | `30s`                    | boltdb access timeout                           |
 | admin.shared.id         | ADMIN_SHARED_ID         |                          | admin names (list of user ids), _multi_         |
-| admin.shared.email      | ADMIN_SHARED_EMAIL      | `admin@${REMARK_URL}`    | admin email                                     |
+| admin.shared.email      | ADMIN_SHARED_EMAIL      | `admin@${REMARK_URL}`    | admin emails, _multi_                           |
 | backup                  | BACKUP_PATH             | `./var/backup`           | backups location                                |
 | max-back                | MAX_BACKUP_FILES        | `10`                     | max backup files to keep                        |
+| cache.type              | CACHE_TYPE              | `mem`                    | type of cache, `redis_pub_sub` or `mem` or `none` |
+| cache.redis_addr        | CACHE_REDIS_ADDR        | `127.0.0.1:6379`         | address of redis PubSub instance, turn `redis_pub_sub` cache on for distributed cache |
 | cache.max.items         | CACHE_MAX_ITEMS         | `1000`                   | max number of cached items, `0` - unlimited     |
 | cache.max.value         | CACHE_MAX_VALUE         | `65536`                  | max size of cached value, `0` - unlimited       |
 | cache.max.size          | CACHE_MAX_SIZE          | `50000000`               | max size of all cached values, `0` - unlimited  |
@@ -135,8 +138,10 @@ _this is the recommended way to run remark42_
 | auth.google.csec        | AUTH_GOOGLE_CSEC        |                          | Google OAuth client secret                      |
 | auth.facebook.cid       | AUTH_FACEBOOK_CID       |                          | Facebook OAuth client ID                        |
 | auth.facebook.csec      | AUTH_FACEBOOK_CSEC      |                          | Facebook OAuth client secret                    |
-| auth.github.cid         | AUTH_GITHUB_CID         |                          | Github OAuth client ID                          |
-| auth.github.csec        | AUTH_GITHUB_CSEC        |                          | Github OAuth client secret                      |
+| auth.microsoft.cid      | AUTH_MICROSOFT_CID      |                          | Microsoft OAuth client ID                       |
+| auth.microsoft.csec     | AUTH_MICROSOFT_CSEC     |                          | Microsoft OAuth client secret                   |
+| auth.github.cid         | AUTH_GITHUB_CID         |                          | GitHub OAuth client ID                          |
+| auth.github.csec        | AUTH_GITHUB_CSEC        |                          | GitHub OAuth client secret                      |
 | auth.twitter.cid        | AUTH_TWITTER_CID        |                          | Twitter Consumer API Key                        |
 | auth.twitter.csec       | AUTH_TWITTER_CSEC       |                          | Twitter Consumer API Secret key                 |
 | auth.yandex.cid         | AUTH_YANDEX_CID         |                          | Yandex OAuth client ID                          |
@@ -155,6 +160,7 @@ _this is the recommended way to run remark42_
 | notify.telegram.timeout | NOTIFY_TELEGRAM_TIMEOUT | `5s`                     | telegram timeout                                |
 | notify.email.fromAddress | NOTIFY_EMAIL_FROM      |                          | from email address                              |
 | notify.email.verification_subj | NOTIFY_EMAIL_VERIFICATION_SUBJ | `Email verification` | verification message subject          |
+| notify.email.notify_admin | NOTIFY_EMAIL_ADMIN    | `false`                  | notify admin on new comments via ADMIN_SHARED_EMAIL |
 | smtp.host               | SMTP_HOST               |                          | SMTP host                                       |
 | smtp.port               | SMTP_PORT               |                          | SMTP port                                       |
 | smtp.username           | SMTP_USERNAME           |                          | SMTP user name                                  |
@@ -182,6 +188,7 @@ _this is the recommended way to run remark42_
 | image-proxy.cache-external | IMAGE_PROXY_CACHE_EXTERNAL | `false`            | enable caching external images to current image storage |
 | emoji                   | EMOJI                   | `false`                  | enable emoji support                            |
 | simple-view             | SIMPLE_VIEW             | `false`                  | minimized UI with basic info only               |
+| proxy-cors              | PROXY_CORS              | `false`                  | disable internal CORS and delegate it to proxy  |
 | port                    | REMARK_PORT             | `8080`                   | web server port                                 |
 | web-root                | REMARK_WEB_ROOT         | `./web`                  | web server root directory                       |
 | update-limit            | UPDATE_LIMIT            | `0.5`                    | updates/sec limit                               |
@@ -283,6 +290,14 @@ _instructions for google oauth2 setup borrowed from [oauth2_proxy](https://githu
 1.  Under **"Facebook login"** / **"Settings"** fill "Valid OAuth redirect URIs" with your callback url constructed as domain + `/auth/facebook/callback`
 1.  Select **"App Review"** and turn public flag on. This step may ask you to provide a link to your privacy policy.
 
+#### Microsoft Auth Provider
+
+1.  Register a new application [using the Azure portal](https://docs.microsoft.com/en-us/graph/auth-register-app-v2).
+2.  Under **"Authentication/Platform configurations/Web"** enter the correct url constructed as domain + `/auth/microsoft/callback`. i.e. `https://example.mysite.com/auth/microsoft/callback`
+3.  In "Overview" take note of the **Application (client) ID**
+4.  Choose the new project from the top right project dropdown (only if another project is selected)
+5.  Select "Certificates & secrets" and click on "+ New Client Secret".
+
 ##### Twitter Auth Provider
 
 1.	Create a new twitter application https://developer.twitter.com/en/apps
@@ -310,6 +325,11 @@ Optionally, anonymous access can be turned on. In this case an extra `anonymous`
 
 - name should be at least 3 characters long
 - name has to start from the letter and contains letters, numbers, underscores and spaces only.
+
+### Importing comments
+
+Remark supports importing comments from Disqus, WordPress or native backup format.
+All imported comments has `Imported` field set to `true`.
 
 #### Initial import from Disqus
 
@@ -363,14 +383,14 @@ It will expand login info and show full user ID.
 
 #### Docker parameters
 
-Two parameters allow to customize docker container on the system level:
+Two parameters allow customizing Docker container on the system level:
 
 - `APP_UID` - sets UID to run remark42 application in container (default=1001)
 - `TIME_ZONE` - sets time zone of remark42 container (default=America/Chicago)
 
 _see [umputun/baseimage](https://github.com/umputun/baseimage) for more details_
 
-example of compose:
+example of `docker-compose.yml`:
 
 ```yaml
 version: '2'
@@ -434,7 +454,12 @@ Add this snippet to the bottom of web page:
                      // in well defined order
     max_shown_comments: 10, // optional param; if it isn't defined default value (15) will be used
     theme: 'dark', // optional param; if it isn't defined default value ('light') will be used
-    page_title: 'Moving to Remark42' // optional param; if it isn't defined `document.title` will be used
+    page_title: 'Moving to Remark42', // optional param; if it isn't defined `document.title` will be used
+    locale: 'en' // set up locale and language, if it isn't defined default value ('en') will be used
+    show_email_subscription: false // optional param; by default it is `true` and you can see email subscription feature
+                                   // in interface when enable it from backend side
+                                   // if you set this param in `false` you will get notifications email notifications as admin
+                                   // but your users won't have interface for subscription
   };
 
   (function(c) {
@@ -456,6 +481,8 @@ And then add this node in the place where you want to see Remark42 widget:
 
 After that widget will be rendered inside this node.
 
+If you want to set this up on a Single Page App, see [/docs/spa.md](/docs/spa.md).
+
 ##### Themes
 
 Right now Remark has two themes: light and dark.
@@ -468,6 +495,13 @@ Just call this function and pass a name of the theme that you want to turn on:
 ```js
 window.REMARK42.changeTheme('light');
 ```
+
+##### Locales
+
+Right now Remark is translated to en, ru (partially), de, and fi languages.
+You can pick one using [configuration object](#setup-on-your-website).
+
+Do you want translate remark42 to other locale? Please see [this documentation](https://github.com/umputun/remark42/blob/master/docs/translation.md) for details.
 
 #### Last comments
 
@@ -541,23 +575,26 @@ Also script can use `url` property from `remark_config` object, or `window.locat
 
 ## Build from the source
 
-- to build docker container - `make docker`. This command will produce container `umputun/remark42`.
+- to build Docker container - `make docker`. This command will produce container `umputun/remark42`.
 - to build a single binary for direct execution - `make OS=<linux|windows|darwin> ARCH=<amd64|386>`. This step will produce executable
  `remark42` file with everything embedded.
 
 ## Development
 
-You can use fully functional local version to develop and test both frontend & backend.
+You can use fully functional local version to develop and test both frontend & backend. It requires at least 2GB RAM or swap enabled
 
 To bring it up run:
 
 ```bash
 # if you mainly work on backend
-docker-compose -f compose-dev-backend.yml build
-docker-compose -f compose-dev-backend.yml up
+cp compose-dev-backend.yml compose-private.yml
 # if you mainly work on frontend
-docker-compose -f compose-dev-frontend.yml build
-docker-compose -f compose-dev-frontend.yml up
+cp compose-dev-frontend.yml compose-private.yml
+# now, edit / debug `compose-private.yml` to your heart's content.
+
+# build and run
+docker-compose -f compose-private.yml build
+docker-compose -f compose-private.yml up
 ```
 
 It starts Remark42 on `127.0.0.1:8080` and adds local OAuth2 provider “Dev”.
@@ -565,29 +602,34 @@ To access UI demo page go to `127.0.0.1:8080/web`.
 By default, you would be logged in as `dev_user` which defined as admin.
 You can tweak any of [supported parameters](#Parameters) in corresponded yml file.
 
-Backend docker compose config by default skips running frontend related tests.
-Frontend docker compose config by default skips running backend related tests and sets `NODE_ENV=development` for frontend build.
+Backend Docker Compose config by default skips running frontend related tests.
+Frontend Docker Compose config by default skips running backend related tests and sets `NODE_ENV=development` for frontend build.
 
 ### Backend development
 
-In order to run backend locally (development mode, without docker) you have to have latest stable `go` toolchain [installed](https://golang.org/doc/install).
+In order to run backend locally (development mode, without Docker) you have to have the latest stable `go` toolchain [installed](https://golang.org/doc/install).
 
-To run backend - `go run backend/app/main.go server --dbg --secret=12345 --url=http://127.0.0.1:8080 --admin-passwd=password --site=remark`
+To run backend - `cd backend; go run app/main.go server --dbg --secret=12345 --url=http://127.0.0.1:8080 --admin-passwd=password --site=remark`
 It stars backend service with embedded bolt store on port `8080` with basic auth, allowing to authenticate and run requests directly, like this:
 `HTTP http://admin:password@127.0.0.1:8080/api/v1/find?site=remark&sort=-active&format=tree&url=http://127.0.0.1:8080`
 
 ### Frontend development
 
-#### Build
+#### Developer guide
 
-* install [Node.js 8](https://nodejs.org/en/) or higher;
-* install [NPM 6.1.0](https://www.npmjs.com/package/npm);
+Frontend guide can be found here: [./frontend/Readme.md](./frontend/Readme.md)
+
+#### Build
+You should have at least 2GB RAM or swap enabled for building
+
+* install [Node.js 12.11](https://nodejs.org/en/) or higher;
+* install [NPM 6.13.4](https://www.npmjs.com/package/npm);
 * run `npm install` inside `./frontend`;
 * run `npm run build` there;
 * result files will be saved in `./frontend/public`.
 
 **Note** Running `npm install` will set up precommit hooks into your git repository.
-It used to reformat your frontend code using `prettier` and lint with `eslint` before every commit.
+It used to reformat your frontend code using `prettier` and lint with `eslint` and `stylelint` before every commit.
 
 #### Devserver
 
@@ -602,12 +644,17 @@ You can attach to locally running backend by providing `REMARK_URL` environment 
 npx cross-env REMARK_URL=http://127.0.0.1:8080 npm start
 ```
 
+The best way for start local developer environment:
+```sh
+cp compose-dev-frontend.yml compose-private-frontend.yml
+docker-compose -f compose-private-frontend.yml up --build
+cd frontend
+npm run dev
+```
+
 Developer build running by `webpack-dev-server` supports devtools for [React](https://github.com/facebook/react-devtools) and
 [Redux](https://github.com/zalmoxisus/redux-devtools-extension).
 
-#### Frontend guide
-
-Frontend guide can be found here: [./frontend/Readme.md](./frontend/Readme.md)
 
 ## API
 
@@ -860,5 +907,6 @@ _all admin calls require auth and admin privilege_
 * User can edit comments in 5 mins (configurable) window after creation.
 * User ID hashed and prefixed by oauth provider name to avoid collisions and potential abuse.
 * All avatars resized and cached locally to prevent rate limiters from oauth providers, part of [go-pkgz/auth](https://github.com/go-pkgz/auth) functionality.
-* Images can be proxied (`IMG_PROXY=true`) to prevent mixed http/https.
+* Images can be proxied (`IMAGE_PROXY_HTTP2HTTPS=true`) to prevent mixed http/https.
+* All images can be proxied and saved (`IMAGE_PROXY_CACHE_EXTERNAL=true`) instead of serving from original location. Beware, images which are posted with this parameter enabled will be served from proxy even after it will be disabled.
 * Docker build uses [publicly available](https://github.com/umputun/baseimage) base images.

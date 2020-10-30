@@ -1,6 +1,5 @@
 // Package service wraps engine interfaces with common logic unrelated to any particular engine implementation.
 // All consumers should be using service.DataStore and not the naked engine!
-
 package service
 
 import (
@@ -10,16 +9,16 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-pkgz/lcw"
 	log "github.com/go-pkgz/lgr"
 	"github.com/google/uuid"
 	"github.com/hashicorp/go-multierror"
-	"github.com/patrickmn/go-cache"
 	"github.com/pkg/errors"
 
-	"github.com/umputun/remark/backend/app/store"
-	"github.com/umputun/remark/backend/app/store/admin"
-	"github.com/umputun/remark/backend/app/store/engine"
-	"github.com/umputun/remark/backend/app/store/image"
+	"github.com/umputun/remark42/backend/app/store"
+	"github.com/umputun/remark42/backend/app/store/admin"
+	"github.com/umputun/remark42/backend/app/store/engine"
+	"github.com/umputun/remark42/backend/app/store/image"
 )
 
 // DataStore wraps store.Interface with additional methods
@@ -46,7 +45,7 @@ type DataStore struct {
 	}
 
 	repliesCache struct {
-		*cache.Cache
+		lcw.LoadingCache
 		once sync.Once
 	}
 }
@@ -102,23 +101,24 @@ func (s *DataStore) Create(comment store.Comment) (commentID string, err error) 
 		comment.PostTitle = title
 	}()
 
-	s.submitImages(comment.Locator, comment.ID)
+	commentID, err = s.Engine.Create(comment)
+	s.submitImages(comment)
+
 	if e := s.AdminStore.OnEvent(comment.Locator.SiteID, admin.EvCreate); e != nil {
 		log.Printf("[WARN] failed to send create event, %s", e)
 	}
-
-	return s.Engine.Create(comment)
+	return commentID, err
 }
 
 // Find wraps engine's Find call and alter results if needed. User used to alter comments
 // in order to differentiate between user's comments vs others comments.
-func (s *DataStore) Find(locator store.Locator, sort string, user store.User) ([]store.Comment, error) {
-	return s.FindSince(locator, sort, user, time.Time{})
+func (s *DataStore) Find(locator store.Locator, sortMethod string, user store.User) ([]store.Comment, error) {
+	return s.FindSince(locator, sortMethod, user, time.Time{})
 }
 
 // FindSince wraps engine's Find call and alter results if needed. Returns comments after since tx
-func (s *DataStore) FindSince(locator store.Locator, sort string, user store.User, since time.Time) ([]store.Comment, error) {
-	req := engine.FindRequest{Locator: locator, Sort: sort, Since: since}
+func (s *DataStore) FindSince(locator store.Locator, sortMethod string, user store.User, since time.Time) ([]store.Comment, error) {
+	req := engine.FindRequest{Locator: locator, Sort: sortMethod, Since: since}
 	comments, err := s.Engine.Find(req)
 	if err != nil {
 		return comments, err
@@ -129,7 +129,7 @@ func (s *DataStore) FindSince(locator store.Locator, sort string, user store.Use
 	for i, c := range comments {
 		if c.Controversy == 0 && len(c.Votes) > 0 {
 			c.Controversy = s.controversy(s.upsAndDowns(c))
-			if !changedSort && strings.Contains(sort, "controversy") { // trigger sort change
+			if !changedSort && strings.Contains(sortMethod, "controversy") { // trigger sort change
 				changedSort = true
 			}
 		}
@@ -138,7 +138,7 @@ func (s *DataStore) FindSince(locator store.Locator, sort string, user store.Use
 
 	// resort commits if altered
 	if changedSort {
-		comments = engine.SortComments(comments, sort)
+		comments = engine.SortComments(comments, sortMethod)
 	}
 
 	return comments, nil
@@ -160,7 +160,7 @@ func (s *DataStore) Put(locator store.Locator, comment store.Comment) error {
 }
 
 // GetUserEmail gets user email
-func (s *DataStore) GetUserEmail(siteID string, userID string) (string, error) {
+func (s *DataStore) GetUserEmail(siteID, userID string) (string, error) {
 	res, err := s.Engine.UserDetail(engine.UserDetailRequest{
 		Detail:  engine.UserEmail,
 		Locator: store.Locator{SiteID: siteID},
@@ -176,7 +176,7 @@ func (s *DataStore) GetUserEmail(siteID string, userID string) (string, error) {
 }
 
 // SetUserEmail sets user email
-func (s *DataStore) SetUserEmail(siteID string, userID string, value string) (string, error) {
+func (s *DataStore) SetUserEmail(siteID, userID, value string) (string, error) {
 	res, err := s.Engine.UserDetail(engine.UserDetailRequest{
 		Detail:  engine.UserEmail,
 		Locator: store.Locator{SiteID: siteID},
@@ -193,7 +193,7 @@ func (s *DataStore) SetUserEmail(siteID string, userID string, value string) (st
 }
 
 // DeleteUserDetail deletes user detail
-func (s *DataStore) DeleteUserDetail(siteID string, userID string, detail engine.UserDetail) error {
+func (s *DataStore) DeleteUserDetail(siteID, userID string, detail engine.UserDetail) error {
 	return s.Engine.Delete(engine.DeleteRequest{
 		Locator:    store.Locator{SiteID: siteID},
 		UserID:     userID,
@@ -201,26 +201,59 @@ func (s *DataStore) DeleteUserDetail(siteID string, userID string, detail engine
 	})
 }
 
-// submitImages initiated delayed commit of all images from the comment uploaded to remark42
-func (s *DataStore) submitImages(locator store.Locator, commentID string) {
+// ResubmitStagingImages retrieves timestamp of the oldest image in staging and
+// calls s.submitImages on all comments newer than it
+func (s *DataStore) ResubmitStagingImages(sites []string) error {
+	info, err := s.ImageService.Info()
+	if err != nil {
+		return err
+	}
+	ts := info.FirstStagingImageTS
+	if ts.IsZero() {
+		return nil
+	}
+	result := new(multierror.Error)
+	for _, site := range sites {
+		locator := store.Locator{SiteID: site}
+		comments, err := s.FindSince(locator, "time", store.User{}, ts)
+		result = multierror.Append(result, errors.Wrapf(err, "problem finding comments for site %s", site))
+		for _, c := range comments {
+			s.submitImages(c)
+		}
+	}
+	return result.ErrorOrNil()
+}
 
-	s.ImageService.Submit(func() []string { // get all ids from comment's text
+// submitImages initiated delayed commit of all images from the comment uploaded to remark42
+func (s *DataStore) submitImages(comment store.Comment) {
+	idsFn := func() []string { // get all ids from comment's text
 		// this can be called after last edit, we have to retrieve fresh comment
-		cc, err := s.Engine.Get(engine.GetRequest{Locator: locator, CommentID: commentID})
+		cc, err := s.Engine.Get(engine.GetRequest{Locator: comment.Locator, CommentID: comment.ID})
 		if err != nil {
-			log.Printf("[WARN] can't get comment's %s text for image extraction, %v", commentID, err)
+			log.Printf("[WARN] can't get comment's %s text for image extraction, %v", comment.ID, err)
 			return nil
 		}
 		imgIds, err := s.ImageService.ExtractPictures(cc.Text)
 		if err != nil {
-			log.Printf("[WARN] can't get extract pictures from %s, %v", commentID, err)
+			log.Printf("[WARN] can't get extract pictures from %s, %v", comment.ID, err)
 			return nil
 		}
 		if len(imgIds) > 0 {
-			log.Printf("[DEBUG] image ids extracted from %s - %+v", commentID, imgIds)
+			log.Printf("[DEBUG] image ids extracted from %s - %+v", comment.ID, imgIds)
 		}
 		return imgIds
-	})
+	}
+
+	var err error
+	if comment.Imported {
+		err = s.ImageService.SubmitAndCommit(idsFn)
+	} else {
+		s.ImageService.Submit(idsFn)
+	}
+
+	if err != nil {
+		log.Printf("[WARN] failed to commit comment's images: %v", err)
+	}
 }
 
 // prepareNewComment sets new comment fields, hashing and sanitizing data
@@ -293,7 +326,7 @@ func (s *DataStore) Vote(req VoteReq) (comment store.Comment, err error) {
 	}
 
 	v, voted := comment.Votes[req.UserID]
-	if voted && v == req.Val {
+	if voted && v == req.Val { // voted before and same vote (+/-) again. Change allowed, i.e. +, - or -, + is fine
 		return comment, errors.Errorf("user %s already voted for %s", req.UserID, req.CommentID)
 	}
 
@@ -319,22 +352,22 @@ func (s *DataStore) Vote(req VoteReq) (comment store.Comment, err error) {
 		return comment, errors.Errorf("minimal score reached for comment %s", req.CommentID)
 	}
 
-	// reset vote if user changed to opposite
+	// add ip hash to voted ip map
+	if comment.VotedIPs == nil {
+		comment.VotedIPs = map[string]store.VotedIPInfo{}
+	}
+	comment.VotedIPs[userIPHash] = store.VotedIPInfo{Timestamp: time.Now(), Value: req.Val}
+
+	// reset vote if user changed to opposite. Effectively it is "forget about prev votes" to allow "+ - -" or "- + +" corrections
 	if voted && v != req.Val {
 		delete(comment.Votes, req.UserID)
+		delete(comment.VotedIPs, userIPHash)
 	}
 
 	// add to voted map if first vote
 	if !voted {
 		comment.Votes[req.UserID] = req.Val
 	}
-
-	// add ip hash to voted ip map
-	if comment.VotedIPs == nil {
-		comment.VotedIPs = map[string]store.VotedIPInfo{}
-	}
-
-	comment.VotedIPs[userIPHash] = store.VotedIPInfo{Timestamp: time.Now(), Value: req.Val}
 
 	// update score
 	if req.Val {
@@ -453,11 +486,11 @@ func (s *DataStore) EditComment(locator store.Locator, commentID string, req Edi
 func (s *DataStore) HasReplies(comment store.Comment) bool {
 
 	s.repliesCache.once.Do(func() {
-		//  default expiration time of 5 minutes, purge every 10 minutes
-		s.repliesCache.Cache = cache.New(5*time.Minute, 10*time.Minute)
+		// default expiration time of 5 minutes and cleanup time of 2.5 minutes
+		s.repliesCache.LoadingCache, _ = lcw.NewExpirableCache(lcw.TTL(5 * time.Minute))
 	})
 
-	if _, found := s.repliesCache.Get(comment.ID); found {
+	if _, found := s.repliesCache.Peek(comment.ID); found {
 		return true
 	}
 
@@ -471,7 +504,10 @@ func (s *DataStore) HasReplies(comment store.Comment) bool {
 	for _, c := range comments {
 		if c.ParentID != "" && !c.Deleted {
 			if c.ParentID == comment.ID {
-				s.repliesCache.Set(comment.ID, true, cache.DefaultExpiration)
+				// When this code is reached, key "comment.ID" is not in cache.
+				// Calling cache.Get on it will put it in cache with 5 minutes TTL.
+				// We call it with empty struct as value as we care about keys and not values.
+				_, _ = s.repliesCache.Get(comment.ID, func() (lcw.Value, error) { return struct{}{}, nil })
 				return true
 			}
 		}
@@ -568,7 +604,7 @@ func (s *DataStore) ValidateComment(c *store.Comment) error {
 }
 
 // IsAdmin checks if usesID in the list of admins
-func (s *DataStore) IsAdmin(siteID string, userID string) bool {
+func (s *DataStore) IsAdmin(siteID, userID string) bool {
 	admins, err := s.AdminStore.Admins(siteID)
 	if err != nil {
 		log.Printf("[WARN] can't get admins for %s, %v", siteID, err)
@@ -602,14 +638,14 @@ func (s *DataStore) SetReadOnly(locator store.Locator, status bool) error {
 }
 
 // IsVerified checks if user verified
-func (s *DataStore) IsVerified(siteID string, userID string) bool {
+func (s *DataStore) IsVerified(siteID, userID string) bool {
 	req := engine.FlagRequest{Locator: store.Locator{SiteID: siteID}, UserID: userID, Flag: engine.Verified}
 	ro, err := s.Engine.Flag(req)
 	return err == nil && ro
 }
 
 // SetVerified set/reset verified status for user
-func (s *DataStore) SetVerified(siteID string, userID string, status bool) error {
+func (s *DataStore) SetVerified(siteID, userID string, status bool) error {
 	roStatus := engine.FlagFalse
 	if status {
 		roStatus = engine.FlagTrue
@@ -620,14 +656,14 @@ func (s *DataStore) SetVerified(siteID string, userID string, status bool) error
 }
 
 // IsBlocked checks if user blocked
-func (s *DataStore) IsBlocked(siteID string, userID string) bool {
+func (s *DataStore) IsBlocked(siteID, userID string) bool {
 	req := engine.FlagRequest{Locator: store.Locator{SiteID: siteID}, UserID: userID, Flag: engine.Blocked}
 	ro, err := s.Engine.Flag(req)
 	return err == nil && ro
 }
 
 // SetBlock set/reset verified status for user
-func (s *DataStore) SetBlock(siteID string, userID string, status bool, ttl time.Duration) error {
+func (s *DataStore) SetBlock(siteID, userID string, status bool, ttl time.Duration) error {
 	roStatus := engine.FlagFalse
 	if status {
 		roStatus = engine.FlagTrue
@@ -673,13 +709,13 @@ func (s *DataStore) Delete(locator store.Locator, commentID string, mode store.D
 }
 
 // DeleteUser removes all comments from user
-func (s *DataStore) DeleteUser(siteID string, userID string, mode store.DeleteMode) error {
+func (s *DataStore) DeleteUser(siteID, userID string, mode store.DeleteMode) error {
 	req := engine.DeleteRequest{Locator: store.Locator{SiteID: siteID}, UserID: userID, DeleteMode: mode}
 	return s.Engine.Delete(req)
 }
 
 // List of commented posts
-func (s *DataStore) List(siteID string, limit int, skip int) ([]store.PostInfo, error) {
+func (s *DataStore) List(siteID string, limit, skip int) ([]store.PostInfo, error) {
 	req := engine.InfoRequest{Locator: store.Locator{SiteID: siteID}, Limit: limit, Skip: skip}
 	return s.Engine.Info(req)
 }
@@ -821,7 +857,15 @@ func (s *DataStore) Last(siteID string, limit int, since time.Time, user store.U
 
 // Close store service
 func (s *DataStore) Close() error {
-	return s.Engine.Close()
+	errs := new(multierror.Error)
+	if s.repliesCache.LoadingCache != nil {
+		errs = multierror.Append(errs, s.repliesCache.LoadingCache.Close())
+	}
+	if s.TitleExtractor != nil {
+		errs = multierror.Append(errs, s.TitleExtractor.Close())
+	}
+	errs = multierror.Append(errs, s.Engine.Close())
+	return errs.ErrorOrNil()
 }
 
 func (s *DataStore) upsAndDowns(c store.Comment) (ups, downs int) {

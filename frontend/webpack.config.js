@@ -14,6 +14,7 @@ const publicFolder = path.resolve(__dirname, 'public');
 const env = process.env.NODE_ENV || 'development';
 const remarkUrl = process.env.REMARK_URL || 'https://demo.remark42.com';
 const NODE_ID = 'remark42';
+const pathToCustomCssProperties = './app/custom-properties.css';
 
 // let's log some env variables because we can
 console.log(`NODE_ENV = ${env}`);
@@ -27,7 +28,14 @@ console.log(`REMARK_ENV = ${remarkUrl}`);
  * so we have to exclude from ignore these modules
  */
 function getExcluded() {
-  const modules = ['@github/markdown-toolbar-element', '@github/text-expander-element', '@github/combobox-nav'];
+  const modules = [
+    '@github/markdown-toolbar-element',
+    '@github/text-expander-element',
+    '@github/combobox-nav',
+    'react-intl',
+    'intl-messageformat',
+    'intl-messageformat-parser',
+  ];
   const exclude = new RegExp(`node_modules\\/(?!(${modules.map(m => m.replace(/\//g, '\\/')).join('|')})\\/).*`);
 
   return {
@@ -42,13 +50,16 @@ const postCssLoader = wrap => ({
   loader: 'postcss-loader',
   options: {
     plugins: [
+      require('postcss-custom-properties')({
+        importFrom: path.resolve(__dirname, pathToCustomCssProperties),
+      }),
       require('postcss-for'),
       require('postcss-simple-vars'),
       require('postcss-nested'),
       require('postcss-calc'),
-      require('autoprefixer')({ overrideBrowserslist: ['> 1%'] }),
+      require('autoprefixer'),
       require('postcss-url')({ url: 'inline', maxSize: 5 }),
-      wrap ? require('postcss-wrap')({ selector: `#${NODE_ID}` }) : false,
+      wrap ? require('postcss-prefixwrap')(`#${NODE_ID}`, { ignoredSelectors: [':root'] }) : false,
       require('postcss-csso'),
     ].filter(plugin => plugin),
   },
@@ -64,8 +75,8 @@ module.exports = () => ({
   entry: {
     embed: './app/embed.ts',
     counter: './app/counter.ts',
-    'last-comments': './app/last-comments.tsx',
-    remark: './app/remark.tsx',
+    'last-comments': [pathToCustomCssProperties, './app/last-comments.tsx'],
+    remark: [pathToCustomCssProperties, './app/remark.tsx'],
     deleteme: './app/deleteme.ts',
   },
   output: {
@@ -101,16 +112,20 @@ module.exports = () => ({
           },
           {
             test: /\.js(x?)$/,
-            use: [{ loader: 'babel-loader', options: { configFile: babelConfigPath } }],
+            use: [{ loader: 'babel-loader', options: { cacheDirectory: true, configFile: babelConfigPath } }],
             ...getExcluded(),
           },
           {
             test: /\.ts(x?)$/,
-            use: [{ loader: 'babel-loader', options: { configFile: babelConfigPath } }, 'ts-loader'],
+            use: [
+              { loader: 'babel-loader', options: { cacheDirectory: true, configFile: babelConfigPath } },
+              'ts-loader',
+            ],
             ...getExcluded(),
           },
           {
-            test: /\.s?css$/,
+            test: /\.(s?css|pcss)$/,
+            exclude: /\.module\.pcss$/,
             use: [
               {
                 loader: MiniCssExtractPlugin.loader,
@@ -157,6 +172,12 @@ module.exports = () => ({
       'process.env.REMARK_URL': env === 'production' ? JSON.stringify(remarkUrl) : 'window.location.origin',
     }),
     new Html({
+      template: path.resolve(__dirname, 'iframe.html'),
+      filename: 'iframe.html',
+      inject: false,
+      env,
+    }),
+    new Html({
       template: path.resolve(__dirname, 'index.ejs'),
       inject: false,
     }),
@@ -191,7 +212,12 @@ module.exports = () => ({
             openAnalyzer: false,
           }),
         ]),
-    new Copy(['./iframe.html', './deleteme.html', './markdown-help.html']),
+    new Copy({
+      patterns: [
+        { from: './deleteme.html', to: 'deleteme.html' },
+        { from: './markdown-help.html', to: 'markdown-help.html' },
+      ],
+    }),
   ],
   watchOptions: {
     ignored: /(node_modules|\.vendor\.js$)/,
@@ -203,7 +229,7 @@ module.exports = () => ({
   },
   devServer: {
     host: '0.0.0.0',
-    port: 9000,
+    port: process.env.PORT || 9000,
     contentBase: publicFolder,
     publicPath: '/web',
     disableHostCheck: true,

@@ -6,11 +6,10 @@ import (
 	"testing"
 	"time"
 
-	log "github.com/go-pkgz/lgr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/umputun/remark/backend/app/store"
+	"github.com/umputun/remark42/backend/app/store"
 )
 
 func TestMakeTree(t *testing.T) {
@@ -84,7 +83,7 @@ func TestMakeEmptySubtree(t *testing.T) {
 	res := MakeTree(comments, "time", 0)
 	resJSON, err := json.Marshal(&res)
 	require.NoError(t, err)
-	log.Print(string(resJSON))
+	t.Log(string(resJSON))
 
 	expJSON := mustLoadJSONFile(t, "testdata/tree_del.json")
 	assert.Equal(t, string(expJSON), string(resJSON))

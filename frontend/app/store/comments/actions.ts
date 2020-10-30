@@ -1,10 +1,21 @@
-import api from '@app/common/api';
-import { Tree, Comment, Sorting, CommentMode, Node } from '@app/common/types';
+import * as api from '@app/common/api';
+import { Tree, Comment, CommentMode, Node, Sorting } from '@app/common/types';
 
 import { StoreAction, StoreState } from '../index';
-import { POST_INFO_SET } from '../post_info/types';
+import { setPostInfo } from '../post_info/actions';
 import { filterTree } from './utils';
-import { COMMENTS_SET, COMMENT_MODE_SET, COMMENTS_APPEND, COMMENTS_EDIT } from './types';
+import {
+  COMMENTS_SET,
+  COMMENT_MODE_SET,
+  COMMENTS_APPEND,
+  COMMENTS_EDIT,
+  COMMENT_MODE_SET_ACTION,
+  COMMENTS_SET_SORT,
+  COMMENTS_REQUEST_FETCHING,
+  COMMENTS_REQUEST_SUCCESS,
+} from './types';
+import { setItem } from '@app/common/local-storage';
+import { LS_SORT_KEY } from '@app/common/constants';
 
 /** sets comments, and put pinned comments in cache */
 export const setComments = (comments: Node[]): StoreAction<void> => dispatch => {
@@ -47,7 +58,7 @@ export const setPinState = (id: Comment['id'], value: boolean): StoreAction<Prom
   } else {
     await api.unpinComment(id);
   }
-  let comment = getState().comments[id];
+  let comment = getState().comments.allComments[id];
   comment = { ...comment, pin: value, edit: { summary: '', time: new Date().toISOString() } };
   dispatch({ type: COMMENTS_EDIT, comment });
 };
@@ -61,40 +72,54 @@ export const removeComment = (id: Comment['id']): StoreAction<Promise<void>> => 
   } else {
     await api.removeMyComment(id);
   }
-  let comment = getState().comments[id];
+  let comment = getState().comments.allComments[id];
   comment = { ...comment, delete: true, edit: { summary: '', time: new Date().toISOString() } };
   dispatch({ type: COMMENTS_EDIT, comment });
 };
 
 /** fetches comments from server */
-export const fetchComments = (sort: Sorting): StoreAction<Promise<Tree>> => async (dispatch, getState) => {
-  const data = await api.getPostComments(sort);
-  const hiddenUsersIds = Object.keys(getState().hiddenUsers);
-  if (hiddenUsersIds.length > 0)
+export const fetchComments = (sort?: Sorting): StoreAction<Promise<Tree>> => async (dispatch, getState) => {
+  const { hiddenUsers, comments } = getState();
+  const hiddenUsersIds = Object.keys(hiddenUsers);
+  dispatch({ type: COMMENTS_REQUEST_FETCHING });
+  const data = await api.getPostComments(sort || comments.sort);
+  dispatch({ type: COMMENTS_REQUEST_SUCCESS });
+  if (hiddenUsersIds.length > 0) {
     data.comments = filterTree(data.comments, node => hiddenUsersIds.indexOf(node.comment.user.id) === -1);
+  }
+
   dispatch(setComments(data.comments));
-  dispatch({
-    type: POST_INFO_SET,
-    info: data.info,
-  });
+  dispatch(setPostInfo(data.info));
+
   return data;
 };
 
 /** sets mode for comment, either reply or edit */
-export const setCommentMode = (mode: StoreState['activeComment']): StoreAction<void> => dispatch => {
+export const setCommentMode = (mode: StoreState['comments']['activeComment']): StoreAction<void> => dispatch => {
   if (mode !== null && mode.state === CommentMode.None) {
     mode = null;
   }
-  dispatch({
-    type: COMMENT_MODE_SET,
-    mode,
-  });
+  dispatch(unsetCommentMode(mode));
 };
 
 /** unsets comment mode */
-export const unsetCommentMode = (): StoreAction<void> => dispatch => {
-  dispatch({
+export function unsetCommentMode(mode: StoreState['comments']['activeComment'] = null) {
+  return {
     type: COMMENT_MODE_SET,
-    mode: null,
-  });
-};
+    mode,
+  } as COMMENT_MODE_SET_ACTION;
+}
+
+export function updateSorting(sort: Sorting): StoreAction<void> {
+  return async (dispath, getState) => {
+    const { sort: prevSort } = getState().comments;
+    dispath({ type: COMMENTS_SET_SORT, payload: sort });
+
+    try {
+      await dispath(fetchComments(sort));
+      setItem(LS_SORT_KEY, sort);
+    } catch (e) {
+      dispath({ type: COMMENTS_SET_SORT, payload: prevSort });
+    }
+  };
+}

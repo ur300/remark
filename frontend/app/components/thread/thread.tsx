@@ -11,6 +11,8 @@ import { setCollapse } from '@app/store/thread/actions';
 import { getThreadIsCollapsed } from '@app/store/thread/getters';
 import { InView } from '@app/components/root/in-view/in-view';
 import { ConnectedComment as Comment } from '@app/components/comment/connected-comment';
+import { CommentForm } from '@app/components/comment-form';
+import { useIntl } from 'react-intl';
 
 interface Props {
   id: CommentInterface['id'];
@@ -22,8 +24,9 @@ interface Props {
 }
 
 const commentSelector = (id: string) => (state: StoreState) => {
-  const { theme, comments, childComments } = state;
-  const comment = comments[id];
+  const { theme, comments } = state;
+  const { allComments, childComments } = comments;
+  const comment = allComments[id];
   const childs = childComments[id];
   const collapsed = getThreadIsCollapsed(comment)(state);
 
@@ -32,6 +35,7 @@ const commentSelector = (id: string) => (state: StoreState) => {
 
 export const Thread: FunctionComponent<Props> = ({ id, level, mix, getPreview }) => {
   const dispatch = useDispatch();
+  const intl = useIntl();
   const { collapsed, comment, childs, theme } = useSelector(commentSelector(id), shallowEqual);
   const collapse = useCallback(() => {
     dispatch(setCollapse(id, !collapsed));
@@ -51,9 +55,11 @@ export const Thread: FunctionComponent<Props> = ({ id, level, mix, getPreview })
       <InView>
         {inviewProps => (
           <Comment
-            ref={ref => inviewProps.ref(ref)}
+            CommentForm={CommentForm}
+            ref={inviewProps.ref}
             key={`comment-${id}`}
             view="main"
+            intl={intl}
             data={comment}
             repliesCount={repliesCount}
             level={level}

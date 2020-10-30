@@ -11,7 +11,7 @@ import (
 	log "github.com/go-pkgz/lgr"
 	"github.com/pkg/errors"
 
-	"github.com/umputun/remark/backend/app/store"
+	"github.com/umputun/remark42/backend/app/store"
 )
 
 // CleanupCommand set of flags and command for cleanup
@@ -34,7 +34,7 @@ var (
 
 // Execute runs cleanup with CleanupCommand parameters, entry point for "cleanup" command
 // This command uses provided flags to detect and remove junk comments
-func (cc *CleanupCommand) Execute(args []string) error {
+func (cc *CleanupCommand) Execute(_ []string) error {
 	log.Printf("[INFO] cleanup for site %s", cc.Site)
 
 	posts, err := cc.postsInRange(cc.From, cc.To)
@@ -234,7 +234,7 @@ func (cc *CleanupCommand) setTitle(c store.Comment) error {
 }
 
 // isSpam calculates spam's probability as a score
-func (cc *CleanupCommand) isSpam(comment store.Comment) (bool, float64) {
+func (cc *CleanupCommand) isSpam(comment store.Comment) (isSpam bool, spamScore float64) {
 
 	badWord := func(txt string) float64 {
 		res := 0.0

@@ -1,13 +1,7 @@
-import { Sorting, AuthProvider, BlockingDuration, Theme } from './types';
-import * as configConstant from './constants.config';
+import { Sorting, AuthProvider, Theme } from './types';
 
-export const BASE_URL = configConstant.BASE_URL;
-export const API_BASE = configConstant.API_BASE;
-export const NODE_ID = configConstant.NODE_ID;
-export const COMMENT_NODE_CLASSNAME_PREFIX = configConstant.COMMENT_NODE_CLASSNAME_PREFIX;
+export { BASE_URL, API_BASE, NODE_ID, COMMENT_NODE_CLASSNAME_PREFIX } from './constants.config';
 export const LAST_COMMENTS_NODE_CLASSNAME = 'remark42__last-comments';
-export const DEFAULT_LAST_COMMENTS_MAX = 15;
-export const DEFAULT_MAX_COMMENT_SIZE = 1000;
 export const MAX_SHOWN_ROOT_COMMENTS = 10;
 
 export const DEFAULT_SORT: Sorting = '-active';
@@ -27,30 +21,14 @@ export const PROVIDER_NAMES: { [P in AuthProvider['name']]: string } = {
 /** locastorage key for collapsed comments */
 export const LS_COLLAPSE_KEY = '__remarkCollapsed';
 
+/** locastorage key for comment form value */
+export const LS_SAVED_COMMENT_VALUE = '__remark_comment_value';
+
 /** locastorage key for hidden users */
 export const LS_HIDDEN_USERS_KEY = '__remarkHiddenUsers';
 
-/** cookie key under which sort preference resides */
-export const COOKIE_SORT_KEY = 'remarkSort';
-
-export const BLOCKING_DURATIONS: BlockingDuration[] = [
-  {
-    label: 'Permanently',
-    value: 'permanently',
-  },
-  {
-    label: 'For a month',
-    value: '43200m',
-  },
-  {
-    label: 'For a week',
-    value: '10080m',
-  },
-  {
-    label: 'For a day',
-    value: '1440m',
-  },
-];
+/** localstorage key under which sort preference resides */
+export const LS_SORT_KEY = '__remarkSort';
 
 export const THEMES: Theme[] = ['light', 'dark'];
 

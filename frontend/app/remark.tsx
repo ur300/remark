@@ -7,6 +7,10 @@ if (process.env.NODE_ENV === 'development') {
 }
 import loadPolyfills from '@app/common/polyfills';
 
+import { IntlProvider } from 'react-intl';
+import { loadLocale } from './utils/loadLocale';
+import { getLocale } from './utils/getLocale';
+
 import { createElement, render } from 'preact';
 import { bindActionCreators } from 'redux';
 import { Provider } from 'react-redux';
@@ -20,10 +24,11 @@ import '@app/components/list-comments';
 
 import { NODE_ID, BASE_URL } from '@app/common/constants';
 import { StaticStore } from '@app/common/static_store';
-import api from '@app/common/api';
+import { getConfig } from '@app/common/api';
 import { fetchHiddenUsers } from './store/user/actions';
 import { restoreProvider } from './store/provider/actions';
 import { restoreCollapsedThreads } from './store/thread/actions';
+import parseQuery from './utils/parseQuery';
 
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', init);
@@ -51,36 +56,30 @@ async function init(): Promise<void> {
   boundActions.restoreProvider();
   boundActions.restoreCollapsedThreads();
 
-  const params = window.location.search
-    .replace(/^\?/, '')
-    .split('&')
-    .reduce<{ [key: string]: string }>((memo, value) => {
-      const vals = value.split('=');
-      if (vals.length === 2) {
-        memo[vals[0]] = vals[1];
-      }
-      return memo;
-    }, {});
-
-  StaticStore.config = await api.getConfig();
+  const params = parseQuery();
+  const locale = getLocale(params);
+  const messages = await loadLocale(locale).catch(() => ({}));
+  StaticStore.config = await getConfig();
 
   if (params.page === 'user-info') {
     return render(
-      <div id={NODE_ID}>
+      <IntlProvider locale={locale} messages={messages}>
         <div className="root root_user-info">
           <Provider store={reduxStore}>
             <UserInfo />
           </Provider>
         </div>
-      </div>,
+      </IntlProvider>,
       node
     );
   }
 
   render(
-    <Provider store={reduxStore}>
-      <ConnectedRoot />
-    </Provider>,
+    <IntlProvider locale={locale} messages={messages}>
+      <Provider store={reduxStore}>
+        <ConnectedRoot />
+      </Provider>
+    </IntlProvider>,
     node
   );
 }

@@ -8,20 +8,19 @@ import (
 	"testing"
 	"time"
 
-	bolt "github.com/coreos/bbolt"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	bolt "go.etcd.io/bbolt"
 )
 
 func TestBoltStore_SaveCommit(t *testing.T) {
 	svc, teardown := prepareBoltImageStorageTest(t)
 	defer teardown()
 
-	id, err := svc.Save("file1.png", "user1", gopherPNG())
+	id := "test_img"
+
+	err := svc.Save(id, gopherPNGBytes())
 	assert.NoError(t, err)
-	assert.Contains(t, id, "user1")
-	t.Log(id)
 
 	err = svc.db.View(func(tx *bolt.Tx) error {
 		data := tx.Bucket([]byte(imagesStagedBktName)).Get([]byte(id))
@@ -31,7 +30,7 @@ func TestBoltStore_SaveCommit(t *testing.T) {
 	})
 	assert.NoError(t, err)
 
-	err = svc.commit(id)
+	err = svc.Commit(id)
 	require.NoError(t, err)
 
 	err = svc.db.View(func(tx *bolt.Tx) error {
@@ -48,21 +47,16 @@ func TestBoltStore_LoadAfterSave(t *testing.T) {
 	svc, teardown := prepareBoltImageStorageTest(t)
 	defer teardown()
 
-	id, err := svc.Save("file1.png", "user1", gopherPNG())
+	id := "test_img"
+	err := svc.Save(id, gopherPNGBytes())
 	assert.NoError(t, err)
-	assert.Contains(t, id, "user1")
-	t.Log(id)
 
-	r, sz, err := svc.Load(id)
-	assert.NoError(t, err)
-	defer func() { assert.NoError(t, r.Close()) }()
-	data, err := ioutil.ReadAll(r)
-
+	data, err := svc.Load(id)
 	assert.NoError(t, err)
 	assert.Equal(t, 1462, len(data))
-	assert.Equal(t, int64(1462), sz)
+	assert.Equal(t, gopherPNGBytes(), data)
 
-	_, _, err = svc.Load("abcd")
+	_, err = svc.Load("abcd")
 	assert.Error(t, err)
 }
 
@@ -70,27 +64,27 @@ func TestBoltStore_Cleanup(t *testing.T) {
 	svc, teardown := prepareBoltImageStorageTest(t)
 	defer teardown()
 
-	save := func(file string, user string) (id string) {
-		id, err := svc.Save(file, user, gopherPNG())
+	save := func(file string) (id string) {
+		err := svc.Save(file, gopherPNGBytes())
 		require.NoError(t, err)
 
-		checkBoltImgData(t, svc.db, imagesStagedBktName, id, func(data []byte) error {
+		checkBoltImgData(t, svc.db, imagesStagedBktName, file, func(data []byte) error {
 			require.NotNil(t, data)
 			assert.Equal(t, 1462, len(data))
 			return nil
 		})
-		return id
+		return file
 	}
 
 	// save 3 images to staging
-	img1 := save("blah_ff1.png", "user1")
+	img1 := save("blah_ff1.png")
 	img1ts := time.Now()
 	time.Sleep(100 * time.Millisecond)
-	img2 := save("blah_ff2.png", "user1")
+	img2 := save("blah_ff2.png")
 	time.Sleep(100 * time.Millisecond)
-	img3 := save("blah_ff3.png", "user2")
+	img3 := save("blah_ff3.png")
 
-	err := svc.cleanup(context.Background(), time.Since(img1ts)) // clean first images
+	err := svc.Cleanup(context.Background(), time.Since(img1ts)) // clean first images
 	assert.NoError(t, err)
 
 	assertBoltImgNil(t, svc.db, imagesStagedBktName, img1)
@@ -98,10 +92,10 @@ func TestBoltStore_Cleanup(t *testing.T) {
 	assertBoltImgNotNil(t, svc.db, imagesStagedBktName, img2)
 	assertBoltImgNotNil(t, svc.db, imagesStagedBktName, img3)
 
-	err = svc.commit(img3)
+	err = svc.Commit(img3)
 	require.NoError(t, err)
 
-	err = svc.cleanup(context.Background(), time.Millisecond*10)
+	err = svc.Cleanup(context.Background(), time.Millisecond*10)
 	assert.NoError(t, err)
 
 	assertBoltImgNil(t, svc.db, imagesStagedBktName, img2)
@@ -110,21 +104,40 @@ func TestBoltStore_Cleanup(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func assertBoltImgNil(t *testing.T, db *bolt.DB, bucket string, id string) {
+func TestBolt_Info(t *testing.T) {
+	svc, teardown := prepareBoltImageStorageTest(t)
+	defer teardown()
+
+	// get info on empty storage, should be zero
+	info, err := svc.Info()
+	assert.NoError(t, err)
+	assert.True(t, info.FirstStagingImageTS.IsZero())
+
+	// save image
+	err = svc.Save("test_img", gopherPNGBytes())
+	assert.NoError(t, err)
+
+	// get info after saving, should be non-zero
+	info, err = svc.Info()
+	assert.NoError(t, err)
+	assert.False(t, info.FirstStagingImageTS.IsZero())
+}
+
+func assertBoltImgNil(t *testing.T, db *bolt.DB, bucket, id string) {
 	checkBoltImgData(t, db, bucket, id, func(data []byte) error {
 		assert.Nil(t, data, id)
 		return nil
 	})
 }
 
-func assertBoltImgNotNil(t *testing.T, db *bolt.DB, bucket string, id string) {
+func assertBoltImgNotNil(t *testing.T, db *bolt.DB, bucket, id string) {
 	checkBoltImgData(t, db, bucket, id, func(data []byte) error {
 		assert.NotNil(t, data, id)
 		return nil
 	})
 }
 
-func checkBoltImgData(t *testing.T, db *bolt.DB, bucket string, id string, callback func([]byte) error) {
+func checkBoltImgData(t *testing.T, db *bolt.DB, bucket, id string, callback func([]byte) error) {
 	err := db.View(func(tx *bolt.Tx) error {
 		bkt := tx.Bucket([]byte(bucket))
 		assert.NotNil(t, bkt, "bucket %s not found", bucket)
@@ -138,7 +151,7 @@ func prepareBoltImageStorageTest(t *testing.T) (svc *Bolt, teardown func()) {
 	loc, err := ioutil.TempDir("", "test_image_r42")
 	require.NoError(t, err, "failed to make temp dir")
 
-	svc, err = NewBoltStorage(path.Join(loc, "picture.db"), 1500, 0, 0, bolt.Options{})
+	svc, err = NewBoltStorage(path.Join(loc, "picture.db"), bolt.Options{})
 	assert.NoError(t, err, "new bolt storage")
 
 	teardown = func() {

@@ -14,13 +14,16 @@
 .comment-form__toolbar-item {
   background: none;
   border: 0;
-  color: #586069;
-  display: block;
+  color: var(--color37);
+  display: flex;
   float: left;
-  padding: 4px 5px;
+  height: 24px;
+  width: 24px;
+  justify-content: center;
+  align-items: center;
 
   &:hover {
-    color: #0aa;
+    color: var(--color9);
   }
 }
 

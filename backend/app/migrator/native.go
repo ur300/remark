@@ -11,8 +11,8 @@ import (
 	"github.com/go-pkgz/syncs"
 	"github.com/pkg/errors"
 
-	"github.com/umputun/remark/backend/app/store"
-	"github.com/umputun/remark/backend/app/store/service"
+	"github.com/umputun/remark42/backend/app/store"
+	"github.com/umputun/remark42/backend/app/store/service"
 )
 
 const nativeVersion = 1
@@ -140,8 +140,8 @@ func (n *Native) Import(reader io.Reader, siteID string) (size int, err error) {
 		return 0, errors.Errorf("unexpected import file version %d", m.Version)
 	}
 
-	if err = n.DataStore.DeleteAll(siteID); err != nil {
-		return 0, err
+	if e := n.DataStore.DeleteAll(siteID); e != nil {
+		return 0, e
 	}
 
 	var failed, total, comments int64
@@ -155,6 +155,7 @@ func (n *Native) Import(reader io.Reader, siteID string) (size int, err error) {
 	for {
 		comment := store.Comment{}
 		err = dec.Decode(&comment)
+		comment.Imported = true
 		if err == io.EOF {
 			break
 		}

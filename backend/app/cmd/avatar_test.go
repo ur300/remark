@@ -6,9 +6,9 @@ import (
 	"testing"
 
 	"github.com/go-pkgz/auth/avatar"
-	flags "github.com/jessevdk/go-flags"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/umputun/go-flags"
 )
 
 func TestAvatar_Execute(t *testing.T) {
@@ -42,7 +42,7 @@ type avatarMigratorMock struct {
 	retCount int
 }
 
-func (a *avatarMigratorMock) Migrate(dst, src avatar.Store) (int, error) {
+func (a *avatarMigratorMock) Migrate(_, _ avatar.Store) (int, error) {
 	a.called++
 	return a.retCount, a.retError
 }

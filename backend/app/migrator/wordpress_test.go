@@ -6,14 +6,14 @@ import (
 	"testing"
 	"time"
 
-	bolt "github.com/coreos/bbolt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	bolt "go.etcd.io/bbolt"
 
-	"github.com/umputun/remark/backend/app/store"
-	"github.com/umputun/remark/backend/app/store/admin"
-	"github.com/umputun/remark/backend/app/store/engine"
-	"github.com/umputun/remark/backend/app/store/service"
+	"github.com/umputun/remark42/backend/app/store"
+	"github.com/umputun/remark42/backend/app/store/admin"
+	"github.com/umputun/remark42/backend/app/store/engine"
+	"github.com/umputun/remark42/backend/app/store/service"
 )
 
 func TestWordPress_Import(t *testing.T) {
@@ -42,6 +42,7 @@ func TestWordPress_Import(t *testing.T) {
 	ts, _ := time.Parse(wpTimeLayout, "2010-08-18 15:19:14")
 	assert.Equal(t, ts, c.Timestamp)
 	assert.Equal(t, c.Text, "<p>Mekkatorque was over in that tent up to the right</p>\n")
+	assert.True(t, c.Imported)
 
 	posts, err := dataStore.List(siteID, 0, 0)
 	assert.NoError(t, err)
@@ -77,6 +78,7 @@ func TestWordPress_Convert(t *testing.T) {
 			ID:   "wordpress_" + store.EncodeID("Wednesday Reading &laquo; Cynwise&#039;s Battlefield Manual"),
 			IP:   "74.200.244.101",
 		},
+		Imported: true,
 	}
 	exp1.Timestamp, _ = time.Parse(wpTimeLayout, "2010-07-21 14:02:08")
 	assert.Equal(t, exp1, comments[1])
@@ -190,7 +192,7 @@ var xmlTestWP = `
 		<category domain="post_tag" nicename="alts"><![CDATA[alts]]></category>
 		<category domain="post_tag" nicename="role-playing"><![CDATA[role playing]]></category>
 		<category domain="category" nicename="stuff"><![CDATA[Stuff]]></category>
-		<category domain="post_tag" nicename="wierd-in-a-cant-quite-help-myself-way"><![CDATA[wierd in a can't quite help myself way]]></category>
+		<category domain="post_tag" nicename="weird-in-a-cant-quite-help-myself-way"><![CDATA[weird in a can't quite help myself way]]></category>
 		<wp:postmeta>
 			<wp:meta_key><![CDATA[_edit_last]]></wp:meta_key>
 			<wp:meta_value><![CDATA[2]]></wp:meta_value>

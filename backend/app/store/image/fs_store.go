@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"hash/crc64"
-	"io"
 	"io/ioutil"
 	"math"
 	"os"
@@ -23,10 +22,7 @@ import (
 type FileSystem struct {
 	Location   string
 	Staging    string
-	MaxSize    int
 	Partitions int
-	MaxHeight  int
-	MaxWidth   int
 
 	crc struct {
 		*crc64.Table
@@ -36,42 +32,26 @@ type FileSystem struct {
 	}
 }
 
-// SaveWithID saves data from a reader, with given id
-func (f *FileSystem) SaveWithID(id string, r io.Reader) (string, error) {
-	data, err := readAndValidateImage(r, f.MaxSize)
-	if err != nil {
-		return "", errors.Wrapf(err, "can't load image with ID %s", id)
-	}
-
-	data = resize(data, f.MaxWidth, f.MaxHeight)
+// Save saves image with given id to local FS, staging directory.
+// Files partitioned across multiple subdirectories, and the final path includes part, i.e. /location/user1/03/123-4567
+func (f *FileSystem) Save(id string, img []byte) error {
 	dst := f.location(f.Staging, id)
 
-	if err = os.MkdirAll(path.Dir(dst), 0700); err != nil {
-		return "", errors.Wrap(err, "can't make image directory")
+	if err := os.MkdirAll(path.Dir(dst), 0700); err != nil {
+		return errors.Wrap(err, "can't make image directory")
 	}
 
-	if err = ioutil.WriteFile(dst, data, 0600); err != nil {
-		return "", errors.Wrapf(err, "can't write image file with id %s", id)
+	if err := ioutil.WriteFile(dst, img, 0600); err != nil {
+		return errors.Wrapf(err, "can't write image file with id %s", id)
 	}
 
-	log.Printf("[DEBUG] file %s saved for image %s, size=%d", dst, id, len(data))
-	return id, nil
-}
-
-// Save data from a reader for given file name to local FS, staging directory. Returns id as user/uuid
-// Files partitioned across multiple subdirectories, and the final path includes part, i.e. /location/user1/03/123-4567
-func (f *FileSystem) Save(fileName string, userID string, r io.Reader) (id string, err error) {
-	tempId := path.Join(userID, guid()) // make id as user/uuid
-	id, err = f.SaveWithID(tempId, r)
-	if err != nil {
-		err = errors.Wrapf(err, "can't save image file %s", fileName)
-	}
-	return id, err
+	log.Printf("[DEBUG] file %s saved for image %s, size=%d", dst, id, len(img))
+	return nil
 }
 
 // Commit file stored in staging location by moving it to permanent location
-func (f *FileSystem) commit(id string) error {
-	log.Printf("[DEBUG] commit image %s", id)
+func (f *FileSystem) Commit(id string) error {
+	log.Printf("[DEBUG] Commit image %s", id)
 	stagingImage, permImage := f.location(f.Staging, id), f.location(f.Location, id)
 
 	if err := os.MkdirAll(path.Dir(permImage), 0700); err != nil {
@@ -83,34 +63,33 @@ func (f *FileSystem) commit(id string) error {
 }
 
 // Load image from FS. Uses id to get partition subdirectory.
-// returns ReadCloser and caller should call close after processing completed.
-func (f *FileSystem) Load(id string) (io.ReadCloser, int64, error) {
+func (f *FileSystem) Load(id string) ([]byte, error) {
 
 	// get image file by id. first try permanent location and if not found - staging
-	img := func(id string) (file string, st os.FileInfo, err error) {
+	img := func(id string) (file string, err error) {
 		file = f.location(f.Location, id)
-		st, err = os.Stat(file)
+		_, err = os.Stat(file)
 		if err != nil {
 			file = f.location(f.Staging, id)
-			st, err = os.Stat(file)
+			_, err = os.Stat(file)
 		}
-		return file, st, errors.Wrapf(err, "can't get image stats for %s", id)
+		return file, errors.Wrapf(err, "can't get image stats for %s", id)
 	}
 
-	imgFile, st, err := img(id)
+	imgFile, err := img(id)
 	if err != nil {
-		return nil, 0, errors.Wrapf(err, "can't get image file for %s", id)
+		return nil, errors.Wrapf(err, "can't get image file for %s", id)
 	}
 
-	fh, err := os.Open(imgFile) // nolint
+	fh, err := os.Open(imgFile) //nolint:gosec // we open file from known location
 	if err != nil {
-		return nil, 0, errors.Wrapf(err, "can't load image %s", id)
+		return nil, errors.Wrapf(err, "can't load image %s", id)
 	}
-	return fh, st.Size(), nil
+	return ioutil.ReadAll(fh)
 }
 
 // Cleanup runs scan of staging and removes old files based on ttl
-func (f *FileSystem) cleanup(_ context.Context, ttl time.Duration) error {
+func (f *FileSystem) Cleanup(_ context.Context, ttl time.Duration) error {
 
 	if _, err := os.Stat(f.Staging); os.IsNotExist(err) {
 		return nil
@@ -136,16 +115,38 @@ func (f *FileSystem) cleanup(_ context.Context, ttl time.Duration) error {
 	return errors.Wrap(err, "failed to cleanup images")
 }
 
-// SizeLimit returns max size of allowed image
-func (f *FileSystem) SizeLimit() int {
-	return f.MaxSize
+// Info returns meta information about storage
+func (f *FileSystem) Info() (StoreInfo, error) {
+	if _, err := os.Stat(f.Staging); os.IsNotExist(err) {
+		return StoreInfo{}, nil
+	}
+
+	var ts time.Time
+	err := filepath.Walk(f.Staging, func(fpath string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+
+		created := info.ModTime()
+		if ts.IsZero() || created.Before(ts) {
+			ts = created
+		}
+		return nil
+	})
+	if err != nil {
+		return StoreInfo{}, errors.Wrapf(err, "problem retrieving first timestamp from staging images on fs")
+	}
+	return StoreInfo{FirstStagingImageTS: ts}, nil
 }
 
 // location gets full path for id by adding partition to the final path in order to keep files in different subdirectories
 // and avoid too many files in a single place.
 // the end result is a full path like this - /tmp/images/user1/92/xxx-yyy.png.
 // Number of partitions defined by FileSystem.Partitions
-func (f *FileSystem) location(base string, id string) string {
+func (f *FileSystem) location(base, id string) string {
 
 	partition := func(id string) string {
 		f.crc.Do(func() {

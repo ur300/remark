@@ -14,13 +14,13 @@ import (
 	"syscall"
 	"time"
 
-	bolt "github.com/coreos/bbolt"
 	"github.com/dgrijalva/jwt-go"
 	"github.com/go-pkgz/jrpc"
+	"github.com/go-pkgz/lcw/eventbus"
 	log "github.com/go-pkgz/lgr"
 	"github.com/kyokomi/emoji"
-	authcache "github.com/patrickmn/go-cache"
 	"github.com/pkg/errors"
+	bolt "go.etcd.io/bbolt"
 
 	"github.com/go-pkgz/auth"
 	"github.com/go-pkgz/auth/avatar"
@@ -29,15 +29,16 @@ import (
 	"github.com/go-pkgz/auth/token"
 	cache "github.com/go-pkgz/lcw"
 
-	"github.com/umputun/remark/backend/app/migrator"
-	"github.com/umputun/remark/backend/app/notify"
-	"github.com/umputun/remark/backend/app/rest/api"
-	"github.com/umputun/remark/backend/app/rest/proxy"
-	"github.com/umputun/remark/backend/app/store"
-	"github.com/umputun/remark/backend/app/store/admin"
-	"github.com/umputun/remark/backend/app/store/engine"
-	"github.com/umputun/remark/backend/app/store/image"
-	"github.com/umputun/remark/backend/app/store/service"
+	"github.com/umputun/remark42/backend/app/migrator"
+	"github.com/umputun/remark42/backend/app/notify"
+	"github.com/umputun/remark42/backend/app/rest/api"
+	"github.com/umputun/remark42/backend/app/rest/proxy"
+	"github.com/umputun/remark42/backend/app/store"
+	"github.com/umputun/remark42/backend/app/store/admin"
+	"github.com/umputun/remark42/backend/app/store/engine"
+	"github.com/umputun/remark42/backend/app/store/image"
+	"github.com/umputun/remark42/backend/app/store/service"
+	"github.com/umputun/remark42/backend/app/templates"
 )
 
 // ServerCommand with command line flags and env
@@ -47,7 +48,7 @@ type ServerCommand struct {
 	Cache      CacheGroup      `group:"cache" namespace:"cache" env-namespace:"CACHE"`
 	Admin      AdminGroup      `group:"admin" namespace:"admin" env-namespace:"ADMIN"`
 	Notify     NotifyGroup     `group:"notify" namespace:"notify" env-namespace:"NOTIFY"`
-	SMTP       SmtpGroup       `group:"smtp" namespace:"smtp" env-namespace:"SMTP"`
+	SMTP       SMTPGroup       `group:"smtp" namespace:"smtp" env-namespace:"SMTP"`
 	Image      ImageGroup      `group:"image" namespace:"image" env-namespace:"IMAGE"`
 	SSL        SSLGroup        `group:"ssl" namespace:"ssl" env-namespace:"SSL"`
 	Stream     StreamGroup     `group:"stream" namespace:"stream" env-namespace:"STREAM"`
@@ -74,6 +75,7 @@ type ServerCommand struct {
 	RestrictedWords  []string      `long:"restricted-words" env:"RESTRICTED_WORDS" description:"words prohibited to use in comments" env-delim:","`
 	EnableEmoji      bool          `long:"emoji" env:"EMOJI" description:"enable emoji"`
 	SimpleView       bool          `long:"simpler-view" env:"SIMPLE_VIEW" description:"minimal comment editor mode"`
+	ProxyCORS        bool          `long:"proxy-cors" env:"PROXY_CORS" description:"disable internal CORS and delegate it to proxy"`
 
 	Auth struct {
 		TTL struct {
@@ -83,6 +85,7 @@ type ServerCommand struct {
 		Google    AuthGroup `group:"google" namespace:"google" env-namespace:"GOOGLE" description:"Google OAuth"`
 		Github    AuthGroup `group:"github" namespace:"github" env-namespace:"GITHUB" description:"Github OAuth"`
 		Facebook  AuthGroup `group:"facebook" namespace:"facebook" env-namespace:"FACEBOOK" description:"Facebook OAuth"`
+		Microsoft AuthGroup `group:"microsoft" namespace:"microsoft" env-namespace:"MICROSOFT" description:"Microsoft OAuth"`
 		Yandex    AuthGroup `group:"yandex" namespace:"yandex" env-namespace:"YANDEX" description:"Yandex OAuth"`
 		Twitter   AuthGroup `group:"twitter" namespace:"twitter" env-namespace:"TWITTER" description:"Twitter OAuth"`
 		Dev       bool      `long:"dev" env:"DEV" description:"enable dev (local) oauth2"`
@@ -98,7 +101,7 @@ type ServerCommand struct {
 			SMTPUserName string        `long:"user" env:"USER" description:"[deprecated, use --smtp.username] enable TLS"`
 			TLS          bool          `long:"tls" env:"TLS" description:"[deprecated, use --smtp.tls] SMTP TCP connection timeout"`
 			TimeOut      time.Duration `long:"timeout" env:"TIMEOUT" default:"10s" description:"[deprecated, use --smtp.timeout] SMTP TCP connection timeout"`
-			MsgTemplate  string        `long:"template" env:"TEMPLATE" description:"message template file"`
+			MsgTemplate  string        `long:"template" env:"TEMPLATE" description:"[deprecated, message template file]" default:"email_confirmation_login.html.tmpl"`
 		} `group:"email" namespace:"email" env-namespace:"EMAIL"`
 	} `group:"auth" namespace:"auth" env-namespace:"AUTH"`
 
@@ -129,7 +132,7 @@ type StoreGroup struct {
 
 // ImageGroup defines options group for store pictures
 type ImageGroup struct {
-	Type string `long:"type" env:"TYPE" description:"type of storage" choice:"fs" choice:"bolt" default:"fs"` // nolint
+	Type string `long:"type" env:"TYPE" description:"type of storage" choice:"fs" choice:"bolt" choice:"rpc" default:"fs"` // nolint
 	FS   struct {
 		Path       string `long:"path" env:"PATH" default:"./var/pictures" description:"images location"`
 		Staging    string `long:"staging" env:"STAGING" default:"./var/pictures.staging" description:"staging location"`
@@ -138,9 +141,10 @@ type ImageGroup struct {
 	Bolt struct {
 		File string `long:"file" env:"FILE" default:"./var/pictures.db" description:"images bolt file location"`
 	} `group:"bolt" namespace:"bolt" env-namespace:"bolt"`
-	MaxSize      int `long:"max-size" env:"MAX_SIZE" default:"5000000" description:"max size of image file"`
-	ResizeWidth  int `long:"resize-width" env:"RESIZE_WIDTH" default:"2400" description:"width of resized image"`
-	ResizeHeight int `long:"resize-height" env:"RESIZE_HEIGHT" default:"900" description:"height of resized image"`
+	MaxSize      int      `long:"max-size" env:"MAX_SIZE" default:"5000000" description:"max size of image file"`
+	ResizeWidth  int      `long:"resize-width" env:"RESIZE_WIDTH" default:"2400" description:"width of resized image"`
+	ResizeHeight int      `long:"resize-height" env:"RESIZE_HEIGHT" default:"900" description:"height of resized image"`
+	RPC          RPCGroup `group:"rpc" namespace:"rpc" env-namespace:"RPC"`
 }
 
 // AvatarGroup defines options group for avatar params
@@ -158,8 +162,9 @@ type AvatarGroup struct {
 
 // CacheGroup defines options group for cache params
 type CacheGroup struct {
-	Type string `long:"type" env:"TYPE" description:"type of cache" choice:"mem" choice:"none" default:"mem"` // nolint
-	Max  struct {
+	Type      string `long:"type" env:"TYPE" description:"type of cache" choice:"redis_pub_sub" choice:"mem" choice:"none" default:"mem"` // nolint
+	RedisAddr string `long:"redis_addr" env:"REDIS_ADDR" default:"127.0.0.1:6379" description:"address of redis cache, turn redis cache on for distributed cache"`
+	Max       struct {
 		Items int   `long:"items" env:"ITEMS" default:"1000" description:"max cached items"`
 		Value int   `long:"value" env:"VALUE" default:"65536" description:"max size of cached value"`
 		Size  int64 `long:"size" env:"SIZE" default:"50000000" description:"max size of total cache"`
@@ -171,13 +176,13 @@ type AdminGroup struct {
 	Type   string `long:"type" env:"TYPE" description:"type of admin store" choice:"shared" choice:"rpc" default:"shared"` //nolint
 	Shared struct {
 		Admins []string `long:"id" env:"ID" description:"admin(s) ids" env-delim:","`
-		Email  string   `long:"email" env:"EMAIL" default:"" description:"admin email"`
+		Email  []string `long:"email" env:"EMAIL" description:"admin emails" env-delim:","`
 	} `group:"shared" namespace:"shared" env-namespace:"SHARED"`
 	RPC RPCGroup `group:"rpc" namespace:"rpc" env-namespace:"RPC"`
 }
 
-// SmtpGroup defines options for SMTP server connection, used in auth and notify modules
-type SmtpGroup struct {
+// SMTPGroup defines options for SMTP server connection, used in auth and notify modules
+type SMTPGroup struct {
 	Host     string        `long:"host" env:"HOST" description:"SMTP host"`
 	Port     int           `long:"port" env:"PORT" description:"SMTP port"`
 	Username string        `long:"username" env:"USERNAME" description:"SMTP user name"`
@@ -197,8 +202,9 @@ type NotifyGroup struct {
 		API     string        `long:"api" env:"API" default:"https://api.telegram.org/bot" description:"telegram api prefix"`
 	} `group:"telegram" namespace:"telegram" env-namespace:"TELEGRAM"`
 	Email struct {
-		From                string `long:"fromAddress" env:"FROM" description:"from email address"`
+		From                string `long:"from_address" env:"FROM" description:"from email address"`
 		VerificationSubject string `long:"verification_subj" env:"VERIFICATION_SUBJ" description:"verification message subject"`
+		AdminNotifications  bool   `long:"notify_admin" env:"ADMIN" description:"notify admin on new comments via ADMIN_SHARED_EMAIL"`
 	} `group:"email" namespace:"email" env-namespace:"EMAIL"`
 }
 
@@ -231,6 +237,7 @@ type RPCGroup struct {
 type LoadingCache interface {
 	Get(key cache.Key, fn func() ([]byte, error)) (data []byte, err error) // load from cache if found or put to cache and return
 	Flush(req cache.FlusherRequest)                                        // evict matched records
+	Close() error
 }
 
 // serverApp holds all active objects
@@ -244,11 +251,14 @@ type serverApp struct {
 	avatarStore   avatar.Store
 	notifyService *notify.Service
 	imageService  *image.Service
+	authenticator *auth.Service
 	terminated    chan struct{}
+
+	authRefreshCache *authRefreshCache // stored only to close it properly on shutdown
 }
 
 // Execute is the entry point for "server" command, called by flag parser
-func (s *ServerCommand) Execute(args []string) error {
+func (s *ServerCommand) Execute(_ []string) error {
 	log.Printf("[INFO] start server on port %d", s.Port)
 	resetEnv("SECRET", "AUTH_GOOGLE_CSEC", "AUTH_GITHUB_CSEC", "AUTH_FACEBOOK_CSEC", "AUTH_YANDEX_CSEC", "ADMIN_PASSWD")
 
@@ -301,6 +311,9 @@ func (s *ServerCommand) HandleDeprecatedFlags() (result []DeprecatedFlag) {
 		s.SMTP.TimeOut = s.Auth.Email.TimeOut
 		result = append(result, DeprecatedFlag{Old: "auth.email.timeout", New: "smtp.timeout", RemoveVersion: "1.7.0"})
 	}
+	if s.Auth.Email.MsgTemplate != "email_confirmation_login.html.tmpl" {
+		result = append(result, DeprecatedFlag{Old: "auth.email.template", RemoveVersion: "1.9.0"})
+	}
 	if s.LegacyImageProxy && !s.ImageProxy.HTTP2HTTPS {
 		s.ImageProxy.HTTP2HTTPS = s.LegacyImageProxy
 		result = append(result, DeprecatedFlag{Old: "img-proxy", New: "image-proxy.http2https", RemoveVersion: "1.7.0"})
@@ -313,7 +326,7 @@ func (s *ServerCommand) HandleDeprecatedFlags() (result []DeprecatedFlag) {
 func (s *ServerCommand) newServerApp() (*serverApp, error) {
 
 	if err := makeDirs(s.BackupLocation); err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "failed to create backup store")
 	}
 
 	if !strings.HasPrefix(s.RemarkURL, "http://") && !strings.HasPrefix(s.RemarkURL, "https://") {
@@ -335,7 +348,7 @@ func (s *ServerCommand) newServerApp() (*serverApp, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to make pictures store")
 	}
-	log.Printf("[DEBUG] image service for url=%s, ttl=%v", imageService.ImageAPI, imageService.TTL)
+	log.Printf("[DEBUG] image service for url=%s, EditDuration=%v", imageService.ImageAPI, imageService.EditDuration)
 
 	dataService := &service.DataStore{
 		Engine:                 storeEngine,
@@ -353,14 +366,21 @@ func (s *ServerCommand) newServerApp() (*serverApp, error) {
 
 	loadingCache, err := s.makeCache()
 	if err != nil {
+		_ = dataService.Close()
 		return nil, errors.Wrap(err, "failed to make cache")
 	}
 
 	avatarStore, err := s.makeAvatarStore()
 	if err != nil {
+		_ = dataService.Close()
 		return nil, errors.Wrap(err, "failed to make avatar store")
 	}
-	authenticator := s.makeAuthenticator(dataService, avatarStore, adminStore)
+	authRefreshCache := newAuthRefreshCache()
+	authenticator, err := s.makeAuthenticator(dataService, avatarStore, adminStore, authRefreshCache)
+	if err != nil {
+		_ = dataService.Close()
+		return nil, errors.Wrap(err, "failed to make authenticator")
+	}
 
 	exporter := &migrator.Native{DataStore: dataService}
 
@@ -370,7 +390,7 @@ func (s *ServerCommand) newServerApp() (*serverApp, error) {
 		DisqusImporter:    &migrator.Disqus{DataStore: dataService},
 		WordPressImporter: &migrator.WordPress{DataStore: dataService},
 		NativeExporter:    &migrator.Native{DataStore: dataService},
-		UrlMapperMaker:    migrator.NewUrlMapper,
+		URLMapperMaker:    migrator.NewURLMapper,
 		KeyStore:          adminStore,
 	}
 
@@ -405,6 +425,7 @@ func (s *ServerCommand) newServerApp() (*serverApp, error) {
 
 	sslConfig, err := s.makeSSLConfig()
 	if err != nil {
+		_ = dataService.Close()
 		return nil, errors.Wrap(err, "failed to make config of ssl server params")
 	}
 
@@ -433,6 +454,7 @@ func (s *ServerCommand) newServerApp() (*serverApp, error) {
 		EmojiEnabled:       s.EnableEmoji,
 		AnonVote:           s.AnonymousVote && s.RestrictVoteIP,
 		SimpleView:         s.SimpleView,
+		ProxyCORS:          s.ProxyCORS,
 	}
 
 	srv.ScoreThresholds.Low, srv.ScoreThresholds.Critical = s.LowScore, s.CriticalScore
@@ -441,22 +463,25 @@ func (s *ServerCommand) newServerApp() (*serverApp, error) {
 	if s.Auth.Dev {
 		da, errDevAuth := authenticator.DevAuth()
 		if errDevAuth != nil {
+			_ = dataService.Close()
 			return nil, errors.Wrap(errDevAuth, "can't make dev oauth2 server")
 		}
 		devAuth = da
 	}
 
 	return &serverApp{
-		ServerCommand: s,
-		restSrv:       srv,
-		migratorSrv:   migr,
-		exporter:      exporter,
-		devAuth:       devAuth,
-		dataService:   dataService,
-		avatarStore:   avatarStore,
-		notifyService: notifyService,
-		imageService:  imageService,
-		terminated:    make(chan struct{}),
+		ServerCommand:    s,
+		restSrv:          srv,
+		migratorSrv:      migr,
+		exporter:         exporter,
+		devAuth:          devAuth,
+		dataService:      dataService,
+		avatarStore:      avatarStore,
+		notifyService:    notifyService,
+		imageService:     imageService,
+		authenticator:    authenticator,
+		terminated:       make(chan struct{}),
+		authRefreshCache: authRefreshCache,
 	}, nil
 }
 
@@ -471,28 +496,44 @@ func (a *serverApp) run(ctx context.Context) error {
 		<-ctx.Done()
 		log.Print("[INFO] shutdown initiated")
 		a.restSrv.Shutdown()
-		if a.devAuth != nil {
-			a.devAuth.Shutdown()
-		}
-		if e := a.dataService.Close(); e != nil {
-			log.Printf("[WARN] failed to close data store, %s", e)
-		}
-		if e := a.avatarStore.Close(); e != nil {
-			log.Printf("[WARN] failed to close avatar store, %s", e)
-		}
-		a.notifyService.Close()
-		a.imageService.Close()
-		log.Print("[INFO] shutdown completed")
 	}()
 
 	a.activateBackup(ctx) // runs in goroutine for each site
 	if a.Auth.Dev {
-		go a.devAuth.Run(context.Background()) // dev oauth2 server on :8084
+		go a.devAuth.Run(ctx) // dev oauth2 server on :8084
+	}
+
+	// staging images resubmit after restart of the app
+	if e := a.dataService.ResubmitStagingImages(a.Sites); e != nil {
+		log.Printf("[WARN] failed to resubmit comments with staging images, %s", e)
 	}
 
 	go a.imageService.Cleanup(ctx) // pictures cleanup for staging images
 
 	a.restSrv.Run(a.Port)
+
+	// shutdown procedures after HTTP server is stopped
+	if a.devAuth != nil {
+		a.devAuth.Shutdown()
+	}
+	if e := a.dataService.Close(); e != nil {
+		log.Printf("[WARN] failed to close data store, %s", e)
+	}
+	if e := a.avatarStore.Close(); e != nil {
+		log.Printf("[WARN] failed to close avatar store, %s", e)
+	}
+	if e := a.restSrv.Cache.Close(); e != nil {
+		log.Printf("[WARN] failed to close rest server cache, %s", e)
+	}
+	if e := a.authRefreshCache.Close(); e != nil {
+		log.Printf("[WARN] failed to close auth authRefreshCache, %s", e)
+	}
+	a.notifyService.Close()
+	// call potentially infinite loop with cancellation after a minute as a safeguard
+	minuteCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	a.imageService.Close(minuteCtx)
+
 	close(a.terminated)
 	return nil
 }
@@ -550,12 +591,12 @@ func (s *ServerCommand) makeAvatarStore() (avatar.Store, error) {
 	switch s.Avatar.Type {
 	case "fs":
 		if err := makeDirs(s.Avatar.FS.Path); err != nil {
-			return nil, err
+			return nil, errors.Wrap(err, "failed to create avatar store")
 		}
 		return avatar.NewLocalFS(s.Avatar.FS.Path), nil
 	case "bolt":
 		if err := makeDirs(path.Dir(s.Avatar.Bolt.File)); err != nil {
-			return nil, err
+			return nil, errors.Wrap(err, "failed to create avatar store")
 		}
 		return avatar.NewBoltDB(s.Avatar.Bolt.File, bolt.Options{})
 	case "uri":
@@ -565,39 +606,38 @@ func (s *ServerCommand) makeAvatarStore() (avatar.Store, error) {
 }
 
 func (s *ServerCommand) makePicturesStore() (*image.Service, error) {
+	imageServiceParams := image.ServiceParams{
+		ImageAPI:     s.RemarkURL + "/api/v1/picture/",
+		ProxyAPI:     s.RemarkURL + "/api/v1/img",
+		EditDuration: s.EditDuration,
+		MaxSize:      s.Image.MaxSize,
+		MaxHeight:    s.Image.ResizeHeight,
+		MaxWidth:     s.Image.ResizeWidth,
+	}
 	switch s.Image.Type {
 	case "bolt":
-		boltImageStore, err := image.NewBoltStorage(
-			s.Image.Bolt.File,
-			s.Image.MaxSize,
-			s.Image.ResizeHeight,
-			s.Image.ResizeWidth,
-			bolt.Options{},
-		)
+		boltImageStore, err := image.NewBoltStorage(s.Image.Bolt.File, bolt.Options{})
 		if err != nil {
 			return nil, err
 		}
-		return &image.Service{
-			Store:    boltImageStore,
-			ImageAPI: s.RemarkURL + "/api/v1/picture/",
-			TTL:      5 * s.EditDuration, // add extra time to image TTL for staging
-		}, nil
+		return image.NewService(boltImageStore, imageServiceParams), nil
 	case "fs":
 		if err := makeDirs(s.Image.FS.Path); err != nil {
-			return nil, err
+			return nil, errors.Wrap(err, "failed to create pictures store")
 		}
-		return &image.Service{
-			Store: &image.FileSystem{
-				Location:   s.Image.FS.Path,
-				Staging:    s.Image.FS.Staging,
-				Partitions: s.Image.FS.Partitions,
-				MaxSize:    s.Image.MaxSize,
-				MaxHeight:  s.Image.ResizeHeight,
-				MaxWidth:   s.Image.ResizeWidth,
-			},
-			ImageAPI: s.RemarkURL + "/api/v1/picture/",
-			TTL:      5 * s.EditDuration, // add extra time to image TTL for staging
-		}, nil
+		return image.NewService(&image.FileSystem{
+			Location:   s.Image.FS.Path,
+			Staging:    s.Image.FS.Staging,
+			Partitions: s.Image.FS.Partitions,
+		}, imageServiceParams), nil
+	case "rpc":
+		return image.NewService(&image.RPC{
+			Client: jrpc.Client{
+				API:        s.Image.RPC.API,
+				Client:     http.Client{Timeout: s.Image.RPC.TimeOut},
+				AuthUser:   s.Image.RPC.AuthUser,
+				AuthPasswd: s.Image.RPC.AuthPassword,
+			}}, imageServiceParams), nil
 	}
 	return nil, errors.Errorf("unsupported pictures store type %s", s.Image.Type)
 }
@@ -607,12 +647,15 @@ func (s *ServerCommand) makeAdminStore() (admin.Store, error) {
 
 	switch s.Admin.Type {
 	case "shared":
-		if s.Admin.Shared.Email == "" { // no admin email, use admin@domain
+		sharedAdminEmail := ""
+		if len(s.Admin.Shared.Email) == 0 { // no admin email, use admin@domain
 			if u, err := url.Parse(s.RemarkURL); err == nil {
-				s.Admin.Shared.Email = "admin@" + u.Host
+				sharedAdminEmail = "admin@" + u.Host
 			}
+		} else {
+			sharedAdminEmail = s.Admin.Shared.Email[0]
 		}
-		return admin.NewStaticStore(s.SharedSecret, s.Sites, s.Admin.Shared.Admins, s.Admin.Shared.Email), nil
+		return admin.NewStaticStore(s.SharedSecret, s.Sites, s.Admin.Shared.Admins, sharedAdminEmail), nil
 	case "rpc":
 		r := &admin.RPC{Client: jrpc.Client{
 			API:        s.Admin.RPC.API,
@@ -629,6 +672,17 @@ func (s *ServerCommand) makeAdminStore() (admin.Store, error) {
 func (s *ServerCommand) makeCache() (LoadingCache, error) {
 	log.Printf("[INFO] make cache, type=%s", s.Cache.Type)
 	switch s.Cache.Type {
+	case "redis_pub_sub":
+		redisPubSub, err := eventbus.NewRedisPubSub(s.Cache.RedisAddr, "remark42-cache")
+		if err != nil {
+			return nil, errors.Wrap(err, "cache backend initialization, redis PubSub initialisation")
+		}
+		backend, err := cache.NewLruCache(cache.MaxCacheSize(s.Cache.Max.Size), cache.MaxValSize(s.Cache.Max.Value),
+			cache.MaxKeys(s.Cache.Max.Items), cache.EventBus(redisPubSub))
+		if err != nil {
+			return nil, errors.Wrap(err, "cache backend initialization")
+		}
+		return cache.NewScache(backend), nil
 	case "mem":
 		backend, err := cache.NewLruCache(cache.MaxCacheSize(s.Cache.Max.Size), cache.MaxValSize(s.Cache.Max.Value),
 			cache.MaxKeys(s.Cache.Max.Items))
@@ -642,29 +696,7 @@ func (s *ServerCommand) makeCache() (LoadingCache, error) {
 	return nil, errors.Errorf("unsupported cache type %s", s.Cache.Type)
 }
 
-var msgTemplate = `
-<!DOCTYPE html>
-<html>
-<head>
-	<meta name="viewport" content="width=device-width" />
-	<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
-</head>
-<body>
-<div style="text-align: center; font-family: Arial, sans-serif; font-size: 18px;">
-	<h1 style="position: relative; color: #4fbbd6; margin-top: 0.2em;">Remark42</h1>
-	<p style="position: relative; max-width: 20em; margin: 0 auto 1em auto; line-height: 1.4em;">Confirmation for <b>{{.User}}</b> on site <b>{{.Site}}</b></p>
-	<div style="background-color: #eee; max-width: 20em; margin: 0 auto; border-radius: 0.4em; padding: 0.5em;">
-		<p style="position: relative; margin: 0 0 0.5em 0;">TOKEN</p>
-		<p style="position: relative; font-size: 0.7em; opacity: 0.8;"><i>Copy and paste this text into “token” field on comments page</i></p>
-		<p style="position: relative; font-family: monospace; background-color: #fff; margin: 0; padding: 0.5em; word-break: break-all; text-align: left; border-radius: 0.2em; -webkit-user-select: all; user-select: all;">{{.Token}}</p>
-	</div>
-	<p style="position: relative; margin-top: 2em; font-size: 0.8em; opacity: 0.8;"><i>Sent to {{.Address}}</i></p>
-</div>
-</body>
-</html>
-`
-
-func (s *ServerCommand) addAuthProviders(authenticator *auth.Service) {
+func (s *ServerCommand) addAuthProviders(authenticator *auth.Service) error {
 
 	providers := 0
 	if s.Auth.Google.CID != "" && s.Auth.Google.CSEC != "" {
@@ -677,6 +709,10 @@ func (s *ServerCommand) addAuthProviders(authenticator *auth.Service) {
 	}
 	if s.Auth.Facebook.CID != "" && s.Auth.Facebook.CSEC != "" {
 		authenticator.AddProvider("facebook", s.Auth.Facebook.CID, s.Auth.Facebook.CSEC)
+		providers++
+	}
+	if s.Auth.Microsoft.CID != "" && s.Auth.Microsoft.CSEC != "" {
+		authenticator.AddProvider("microsoft", s.Auth.Microsoft.CID, s.Auth.Microsoft.CSEC)
 		providers++
 	}
 	if s.Auth.Yandex.CID != "" && s.Auth.Yandex.CSEC != "" {
@@ -707,16 +743,31 @@ func (s *ServerCommand) addAuthProviders(authenticator *auth.Service) {
 			ContentType:  s.Auth.Email.ContentType,
 		}
 		sndr := sender.NewEmailClient(params, log.Default())
-		authenticator.AddVerifProvider("email", s.loadEmailTemplate(), sndr)
+		tmpl, err := s.loadEmailTemplate()
+		if err != nil {
+			return err
+		}
+		authenticator.AddVerifProvider("email", tmpl, sndr)
 	}
 
 	if s.Auth.Anonymous {
 		log.Print("[INFO] anonymous access enabled")
-		var isValidAnonName = regexp.MustCompile(`^[a-zA-Z][\w ]+$`).MatchString
+		var isValidAnonName = regexp.MustCompile(`^[\p{L}\d_ ]+$`).MatchString
 		authenticator.AddDirectProvider("anonymous", provider.CredCheckerFunc(func(user, _ string) (ok bool, err error) {
+
+			// don't allow anon with space prefix or suffix
+			if strings.HasPrefix(user, " ") || strings.HasSuffix(user, " ") {
+				log.Printf("[WARN] name %q has space as a suffix or prefix", user)
+				return false, nil
+			}
+
 			user = strings.TrimSpace(user)
 			if len(user) < 3 {
 				log.Printf("[WARN] name %q is too short, should be at least 3 characters", user)
+				return false, nil
+			}
+			if len(user) > 64 {
+				log.Printf("[WARN] name %q is too long, should be up to 64 characters", user)
 				return false, nil
 			}
 
@@ -731,22 +782,29 @@ func (s *ServerCommand) addAuthProviders(authenticator *auth.Service) {
 	if providers == 0 {
 		log.Printf("[WARN] no auth providers defined")
 	}
+
+	return nil
 }
 
-// loadEmailTemplate trying to get template from opts MsgTemplate and default to embedded
-// if not defined or failed to load
-func (s *ServerCommand) loadEmailTemplate() string {
-	tmpl := msgTemplate
-	if s.Auth.Email.MsgTemplate != "" {
-		log.Printf("[DEBUG] load email template from %s", s.Auth.Email.MsgTemplate)
-		b, err := ioutil.ReadFile(s.Auth.Email.MsgTemplate)
-		if err == nil {
-			tmpl = string(b)
-		} else {
-			log.Printf("[WARN] failed to load email template from %s, %v", s.Auth.Email.MsgTemplate, err)
-		}
+// loadEmailTemplate trying to get template from statik
+func (s *ServerCommand) loadEmailTemplate() (string, error) {
+	var file []byte
+	var err error
+
+	if s.Auth.Email.MsgTemplate == "email_confirmation_login.html.tmpl" {
+		fs := templates.NewFS()
+		file, err = fs.ReadFile(s.Auth.Email.MsgTemplate)
+	} else {
+		// deprecated loading from an external file, should be removed before v1.9.0
+		file, err = ioutil.ReadFile(s.Auth.Email.MsgTemplate)
+		log.Printf("[INFO] template %s will be read from disk", s.Auth.Email.MsgTemplate)
 	}
-	return tmpl
+
+	if err != nil {
+		return "", errors.Wrapf(err, "failed to read file %s", s.Auth.Email.MsgTemplate)
+	}
+
+	return string(file), nil
 }
 
 func (s *ServerCommand) makeNotify(dataStore *service.DataStore, authenticator *auth.Service) (*notify.Service, error) {
@@ -767,7 +825,7 @@ func (s *ServerCommand) makeNotify(dataStore *service.DataStore, authenticator *
 				VerificationSubject: s.Notify.Email.VerificationSubject,
 				UnsubscribeURL:      s.RemarkURL + "/email/unsubscribe.html",
 				// TODO: uncomment after #560 frontend part is ready and URL is known
-				//SubscribeURL:        s.RemarkURL + "/subscribe.html?token=",
+				// SubscribeURL:        s.RemarkURL + "/subscribe.html?token=",
 				TokenGenFn: func(userID, email, site string) (string, error) {
 					claims := token.Claims{
 						Handshake: &token.Handshake{ID: userID + "::" + email},
@@ -785,7 +843,10 @@ func (s *ServerCommand) makeNotify(dataStore *service.DataStore, authenticator *
 					return tkn, nil
 				},
 			}
-			smtpParams := notify.SmtpParams{
+			if s.Notify.Email.AdminNotifications {
+				emailParams.AdminEmails = s.Admin.Shared.Email
+			}
+			smtpParams := notify.SMTPParams{
 				Host:     s.SMTP.Host,
 				Port:     s.SMTP.Port,
 				TLS:      s.SMTP.TLS,
@@ -805,7 +866,7 @@ func (s *ServerCommand) makeNotify(dataStore *service.DataStore, authenticator *
 		}
 	}
 
-	if len(destinations) != 0 {
+	if len(destinations) > 0 {
 		log.Printf("[INFO] make notify, types=%s", s.Notify.Type)
 		notifyService = notify.NewService(dataStore, s.Notify.QueueSize, destinations...)
 	}
@@ -833,8 +894,8 @@ func (s *ServerCommand) makeSSLConfig() (config api.SSLConfig, err error) {
 		config.ACMELocation = s.SSL.ACMELocation
 		if s.SSL.ACMEEmail != "" {
 			config.ACMEEmail = s.SSL.ACMEEmail
-		} else if s.Admin.Type == "shared" && s.Admin.Shared.Email != "" {
-			config.ACMEEmail = s.Admin.Shared.Email
+		} else if s.Admin.Type == "shared" && len(s.Admin.Shared.Email) != 0 {
+			config.ACMEEmail = s.Admin.Shared.Email[0]
 		} else if u, e := url.Parse(s.RemarkURL); e == nil {
 			config.ACMEEmail = "admin@" + u.Hostname()
 		}
@@ -842,14 +903,14 @@ func (s *ServerCommand) makeSSLConfig() (config api.SSLConfig, err error) {
 	return config, err
 }
 
-func (s *ServerCommand) makeAuthenticator(ds *service.DataStore, avas avatar.Store, admns admin.Store) *auth.Service {
+func (s *ServerCommand) makeAuthenticator(ds *service.DataStore, avas avatar.Store, admns admin.Store, authRefreshCache *authRefreshCache) (*auth.Service, error) {
 	authenticator := auth.NewService(auth.Opts{
 		URL:            strings.TrimSuffix(s.RemarkURL, "/"),
 		Issuer:         "remark42",
 		TokenDuration:  s.Auth.TTL.JWT,
 		CookieDuration: s.Auth.TTL.Cookie,
 		SecureCookies:  strings.HasPrefix(s.RemarkURL, "https://"),
-		SecretReader: token.SecretFunc(func() (string, error) { // get secret per site
+		SecretReader: token.SecretFunc(func(aud string) (string, error) { // get secret per site
 			return admns.Key()
 		}),
 		ClaimsUpd: token.ClaimsUpdFunc(func(c token.Claims) token.Claims { // set attributes, on new token or refresh
@@ -863,6 +924,22 @@ func (s *ServerCommand) makeAuthenticator(ds *service.DataStore, avas avatar.Sto
 			if err != nil {
 				log.Printf("[WARN] can't read email for %s, %v", c.User.ID, err)
 			}
+
+			// don't allow anonymous with admin's name
+			if strings.HasPrefix(c.User.ID, "anonymous_") {
+				admins, err := admns.Admins(c.Audience)
+				if err != nil {
+					log.Printf("[WARN] can't get admins for %s, %v", c.Audience, err)
+				}
+				for _, a := range admins {
+					if strings.EqualFold(strings.TrimSpace(c.User.Name), a) {
+						c.User.SetBoolAttr("blocked", true)
+						log.Printf("[INFO] blocked %+v, attempt to impersonate admin", c.User)
+						break
+					}
+				}
+			}
+
 			return c
 		}),
 		AdminPasswd: s.AdminPasswd,
@@ -880,28 +957,33 @@ func (s *ServerCommand) makeAuthenticator(ds *service.DataStore, avas avatar.Sto
 		AvatarResizeLimit: s.Avatar.RszLmt,
 		AvatarRoutePath:   "/api/v1/avatar",
 		Logger:            log.Default(),
-		RefreshCache:      newAuthRefreshCache(),
+		RefreshCache:      authRefreshCache,
 		UseGravatar:       true,
 	})
-	s.addAuthProviders(authenticator)
-	return authenticator
+
+	if err := s.addAuthProviders(authenticator); err != nil {
+		return nil, err
+	}
+
+	return authenticator, nil
 }
 
 // authRefreshCache used by authenticator to minimize repeatable token refreshes
 type authRefreshCache struct {
-	*authcache.Cache
+	cache.LoadingCache
 }
 
 func newAuthRefreshCache() *authRefreshCache {
-	return &authRefreshCache{Cache: authcache.New(5*time.Minute, 10*time.Minute)}
+	expirableCache, _ := cache.NewExpirableCache(cache.TTL(5 * time.Minute))
+	return &authRefreshCache{LoadingCache: expirableCache}
 }
 
 // Get implements cache getter with key converted to string
 func (c *authRefreshCache) Get(key interface{}) (interface{}, bool) {
-	return c.Cache.Get(key.(string))
+	return c.LoadingCache.Peek(key.(string))
 }
 
 // Set implements cache setter with key converted to string
 func (c *authRefreshCache) Set(key, value interface{}) {
-	c.Cache.Set(key.(string), value, authcache.DefaultExpiration)
+	_, _ = c.LoadingCache.Get(key.(string), func() (cache.Value, error) { return value, nil })
 }

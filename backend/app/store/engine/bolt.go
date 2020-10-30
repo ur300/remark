@@ -7,12 +7,12 @@ import (
 	"strings"
 	"time"
 
-	bolt "github.com/coreos/bbolt"
 	log "github.com/go-pkgz/lgr"
 	"github.com/hashicorp/go-multierror"
 	"github.com/pkg/errors"
+	bolt "go.etcd.io/bbolt"
 
-	"github.com/umputun/remark/backend/app/store"
+	"github.com/umputun/remark42/backend/app/store"
 )
 
 // BoltDB implements store.Interface, represents multiple sites with multiplexing to different bolt dbs. Thread safe.
@@ -55,7 +55,7 @@ func NewBoltDB(options bolt.Options, sites ...BoltSite) (*BoltDB, error) {
 	log.Printf("[INFO] bolt store for sites %+v, options %+v", sites, options)
 	result := BoltDB{dbs: make(map[string]*bolt.DB)}
 	for _, site := range sites {
-		db, err := bolt.Open(site.FileName, 0600, &options)
+		db, err := bolt.Open(site.FileName, 0600, &options) //nolint:gocritic //octalLiteral is OK as FileMode
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to make boltdb for %s", site.FileName)
 		}
@@ -113,8 +113,8 @@ func (b *BoltDB) Create(comment store.Comment) (commentID string, err error) {
 
 		// add reference to comment to "last" bucket
 		lastBkt = tx.Bucket([]byte(lastBucketName))
-		commentTs := []byte(comment.Timestamp.Format(tsNano))
-		if err = lastBkt.Put(commentTs, ref); err != nil {
+		commentTS := []byte(comment.Timestamp.Format(tsNano))
+		if err = lastBkt.Put(commentTS, ref); err != nil {
 			return errors.Wrapf(err, "can't put reference %s to %s", ref, lastBucketName)
 		}
 
@@ -123,7 +123,7 @@ func (b *BoltDB) Create(comment store.Comment) (commentID string, err error) {
 			return errors.Wrapf(err, "can't get bucket %s", comment.User.ID)
 		}
 		// put into individual user's bucket with ts as a key
-		if err = userBkt.Put(commentTs, ref); err != nil {
+		if err = userBkt.Put(commentTS, ref); err != nil {
 			return errors.Wrapf(err, "failed to put user comment %s for %s", comment.ID, comment.User.ID)
 		}
 
@@ -662,7 +662,7 @@ func (b *BoltDB) getUserDetail(req UserDetailRequest) (result []UserDetailEntry,
 		value := bucket.Get([]byte(req.UserID))
 		// return no error in case of absent entry
 		if value != nil {
-			if err := json.Unmarshal(value, &entry); err != nil {
+			if err = json.Unmarshal(value, &entry); err != nil {
 				return errors.Wrap(e, "failed to unmarshal entry")
 			}
 			switch req.Detail {
@@ -690,7 +690,7 @@ func (b *BoltDB) setUserDetail(req UserDetailRequest) (result []UserDetailEntry,
 		value := bucket.Get([]byte(req.UserID))
 		// return no error in case of absent entry
 		if value != nil {
-			if err := json.Unmarshal(value, &entry); err != nil {
+			if err = json.Unmarshal(value, &entry); err != nil {
 				return errors.Wrap(e, "failed to unmarshal entry")
 			}
 		}
@@ -711,7 +711,7 @@ func (b *BoltDB) setUserDetail(req UserDetailRequest) (result []UserDetailEntry,
 	}
 
 	err = bdb.Update(func(tx *bolt.Tx) error {
-		err := b.save(tx.Bucket([]byte(userDetailsBucketName)), req.UserID, entry)
+		err = b.save(tx.Bucket([]byte(userDetailsBucketName)), req.UserID, entry)
 		return errors.Wrapf(err, "failed to update detail %s for %s in %s", req.Detail, req.UserID, req.Locator.SiteID)
 	})
 
@@ -729,7 +729,7 @@ func (b *BoltDB) listDetails(loc store.Locator) (result []UserDetailEntry, err e
 		var entry UserDetailEntry
 		bucket := tx.Bucket([]byte(userDetailsBucketName))
 		return bucket.ForEach(func(userID, value []byte) error {
-			if err := json.Unmarshal(value, &entry); err != nil {
+			if err = json.Unmarshal(value, &entry); err != nil {
 				return errors.Wrap(e, "failed to unmarshal entry")
 			}
 			result = append(result, entry)
@@ -844,7 +844,7 @@ func (b *BoltDB) deleteAll(bdb *bolt.DB, siteID string) error {
 
 // deleteUser removes all comments and details for given user. Everything will be market as deleted
 // and user name and userID will be changed to "deleted". Also removes from last and from user buckets.
-func (b *BoltDB) deleteUser(bdb *bolt.DB, siteID string, userID string, mode store.DeleteMode) error {
+func (b *BoltDB) deleteUser(bdb *bolt.DB, siteID, userID string, mode store.DeleteMode) error {
 
 	// get list of all comments outside of transaction loop
 	posts, err := b.Info(InfoRequest{Locator: store.Locator{SiteID: siteID}})
@@ -860,6 +860,7 @@ func (b *BoltDB) deleteUser(bdb *bolt.DB, siteID string, userID string, mode sto
 	// get list of commentID for all user's comment
 	comments := []commentInfo{}
 	for _, postInfo := range posts {
+		postInfo := postInfo
 		err = bdb.View(func(tx *bolt.Tx) error {
 			postsBkt := tx.Bucket([]byte(postsBucketName))
 			postBkt := postsBkt.Bucket([]byte(postInfo.URL))
@@ -1007,7 +1008,8 @@ func (b *BoltDB) setInfo(tx *bolt.Tx, comment store.Comment) (store.PostInfo, er
 	}
 	info.Count++
 	info.LastTS = comment.Timestamp
-	return info, b.save(infoBkt, comment.Locator.URL, &info)
+	err := b.save(infoBkt, comment.Locator.URL, &info)
+	return info, err
 }
 
 func (b *BoltDB) db(siteID string) (*bolt.DB, error) {
@@ -1023,7 +1025,7 @@ func (b *BoltDB) makeRef(comment store.Comment) []byte {
 }
 
 // parseRef gets parts of reference
-func (b *BoltDB) parseRef(val []byte) (url string, id string, err error) {
+func (b *BoltDB) parseRef(val []byte) (url, id string, err error) {
 	elems := strings.Split(string(val), "!!")
 	if len(elems) != 2 {
 		return "", "", errors.Errorf("invalid reference value %s", string(val))

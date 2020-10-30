@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	log "github.com/go-pkgz/lgr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 )
 
 func Test_Main(t *testing.T) {
@@ -31,8 +31,8 @@ func Test_Main(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		<-done
-		err := syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
-		require.NoError(t, err)
+		e := syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
+		require.NoError(t, e)
 	}()
 
 	finished := make(chan struct{})
@@ -62,7 +62,7 @@ func TestGetDump(t *testing.T) {
 	assert.True(t, strings.Contains(dump, "goroutine"))
 	assert.True(t, strings.Contains(dump, "[running]"))
 	assert.True(t, strings.Contains(dump, "backend/app/main.go"))
-	log.Printf("\n dump: %s", dump)
+	t.Logf("\n dump: %s", dump)
 }
 
 func chooseRandomUnusedPort() (port int) {
@@ -86,4 +86,8 @@ func waitForHTTPServerStart(port int) {
 			return
 		}
 	}
+}
+
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m, goleak.IgnoreTopFunction("github.com/umputun/remark42/backend/app.init.0.func1"))
 }

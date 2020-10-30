@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/umputun/remark/backend/app/store"
+	"github.com/umputun/remark42/backend/app/store"
 )
 
 // NOTE: mockery works from linked to go-path and with GOFLAGS='-mod=vendor' go generate
@@ -16,18 +16,21 @@ import (
 
 // Interface defines methods provided by low-level storage engine
 type Interface interface {
-	Create(comment store.Comment) (commentID string, err error)  // create new comment, avoid dups by id
-	Update(comment store.Comment) error                          // update comment, mutable parts only
-	Get(req GetRequest) (store.Comment, error)                   // get comment by id
-	Find(req FindRequest) ([]store.Comment, error)               // find comments for locator or site
-	Info(req InfoRequest) ([]store.PostInfo, error)              // get post(s) meta info
-	Count(req FindRequest) (int, error)                          // get count for post or user
-	Delete(req DeleteRequest) error                              // Delete post(s), user, comment, user details, or everything
-	Flag(req FlagRequest) (bool, error)                          // set and get flags
-	ListFlags(req FlagRequest) ([]interface{}, error)            // get list of flagged keys, like blocked & verified user
-	UserDetail(req UserDetailRequest) ([]UserDetailEntry, error) // sets or gets single detail value, or gets all details for requested site.
-	// UserDetail returns list even for single entry request is a compromise in order to have both single detail getting and setting
-	// and all site's details listing under the same function (and not to extend interface by two separate functions).
+	Create(comment store.Comment) (commentID string, err error) // create new comment, avoid dups by id
+	Update(comment store.Comment) error                         // update comment, mutable parts only
+	Get(req GetRequest) (store.Comment, error)                  // get comment by id
+	Find(req FindRequest) ([]store.Comment, error)              // find comments for locator or site
+	Info(req InfoRequest) ([]store.PostInfo, error)             // get post(s) meta info
+	Count(req FindRequest) (int, error)                         // get count for post or user
+	Delete(req DeleteRequest) error                             // Delete post(s), user, comment, user details, or everything
+	Flag(req FlagRequest) (bool, error)                         // set and get flags
+	ListFlags(req FlagRequest) ([]interface{}, error)           // get list of flagged keys, like blocked & verified user
+
+	// UserDetail sets or gets single detail value, or gets all details for requested site
+	// Returns list even for single entry request is a compromise in order to have both single detail getting and setting
+	// and all site's details listing under the same function (and not to extend interface by two separate functions)
+	UserDetail(req UserDetailRequest) ([]UserDetailEntry, error)
+
 	Close() error // close storage engine
 }
 
@@ -83,10 +86,13 @@ const (
 	Verified = Flag("verified")
 	Blocked  = Flag("blocked")
 )
+
+// All possible user details
 const (
-	// All possible user details
-	UserEmail      = UserDetail("email")
-	AllUserDetails = UserDetail("all") // used for listing and deletion requests
+	// UserEmail is a user email
+	UserEmail = UserDetail("email")
+	// AllUserDetails used for listing and deletion requests
+	AllUserDetails = UserDetail("all")
 )
 
 // FlagRequest is the input for both get/set for flags, like blocked, verified and so on

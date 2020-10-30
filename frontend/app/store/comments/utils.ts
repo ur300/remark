@@ -1,4 +1,6 @@
-import { Comment, Node } from '@app/common/types';
+import { Comment, Node, Sorting } from '@app/common/types';
+import { LS_SORT_KEY, DEFAULT_SORT } from '@app/common/constants';
+import { getItem } from '@app/common/local-storage';
 
 /**
  * Filters tree node
@@ -39,4 +41,14 @@ export function findPinnedComments(thread: Node): Comment[] {
 
 export function getPinnedComments(threads: Node[]): Comment[] {
   return threads.reduce((acc: Comment[], thread: Node) => acc.concat(findPinnedComments(thread)), []);
+}
+
+export function getInitialSort() {
+  const sort = getItem(LS_SORT_KEY) as Sorting;
+
+  if (sort) {
+    return sort;
+  }
+
+  return DEFAULT_SORT;
 }

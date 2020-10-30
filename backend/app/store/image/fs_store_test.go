@@ -39,97 +39,53 @@ const gopher = "iVBORw0KGgoAAAANSUhEUgAAAEsAAAA8CAAAAAALAhhPAAAFfUlEQVRYw62XeWwU
 	"nssKrPl8Mx76NL3E6eXc3be7OD+H4WHbJkKI8AU8irbITQjZ+0hQcPEgId/Fn/pl9crKH02+5o2b9T/eMx7pKoskYgAAAABJRU5ErkJggg=="
 
 func gopherPNG() io.Reader { return base64.NewDecoder(base64.StdEncoding, strings.NewReader(gopher)) }
+func gopherPNGBytes() []byte {
+	img, _ := ioutil.ReadAll(gopherPNG())
+	return img
+}
 
 func TestFsStore_Save(t *testing.T) {
 	svc, teardown := prepareImageTest(t)
 	defer teardown()
 
-	id, err := svc.Save("file1.png", "user1", gopherPNG())
+	id := "test_img"
+	err := svc.Save(id, gopherPNGBytes())
 	assert.NoError(t, err)
-	assert.Contains(t, id, "user1/")
-	t.Log(id)
 
 	img := svc.location(svc.Staging, id)
-	t.Log(img)
 	data, err := ioutil.ReadFile(img)
 	assert.NoError(t, err)
 	assert.Equal(t, 1462, len(data))
 }
 
-func TestFsStore_SaveWithResize(t *testing.T) {
-	svc, teardown := prepareImageTest(t)
-	defer teardown()
-	svc.MaxWidth, svc.MaxHeight = 32, 32
-
-	id, err := svc.Save("file1.png", "user1", gopherPNG())
-	assert.NoError(t, err)
-	assert.Contains(t, id, "user1/")
-	t.Log(id)
-
-	img := svc.location(svc.Staging, id)
-	t.Log(img)
-	data, err := ioutil.ReadFile(img)
-	assert.NoError(t, err)
-	assert.Equal(t, 1135, len(data))
-}
-
-func TestFsStore_SaveWithResizeJpeg(t *testing.T) {
-	svc, teardown := prepareImageTest(t)
-	defer teardown()
-	svc.MaxWidth, svc.MaxHeight = 400, 300
-	svc.MaxSize = 32000
-
-	fh, err := os.Open("testdata/circles.jpg")
-	defer func() { assert.NoError(t, fh.Close()) }()
-	assert.NoError(t, err)
-	id, err := svc.Save("circles.jpg", "user1", fh)
-	assert.NoError(t, err)
-	assert.Contains(t, id, "user1/")
-	t.Log(id)
-
-	img := svc.location(svc.Staging, id)
-	t.Log(img)
-	data, err := ioutil.ReadFile(img)
-	assert.NoError(t, err)
-	assert.Equal(t, 10918, len(data))
-}
-
 func TestFsStore_SaveNoResizeJpeg(t *testing.T) {
 	svc, teardown := prepareImageTest(t)
 	defer teardown()
-	svc.MaxWidth, svc.MaxHeight = 1400, 1300
-	svc.MaxSize = 32000
 
 	fh, err := os.Open("testdata/circles.jpg")
 	defer func() { assert.NoError(t, fh.Close()) }()
 	assert.NoError(t, err)
-	id, err := svc.Save("circles.jpg", "user1", fh)
+	img, err := ioutil.ReadAll(fh)
 	assert.NoError(t, err)
-	assert.Contains(t, id, "user1/")
-	t.Log(id)
+	id := "test_img"
+	err = svc.Save(id, img)
+	assert.NoError(t, err)
 
-	img := svc.location(svc.Staging, id)
-	t.Log(img)
-	data, err := ioutil.ReadFile(img)
+	imgPath := svc.location(svc.Staging, id)
+	t.Log(imgPath)
+	data, err := ioutil.ReadFile(imgPath)
 	assert.NoError(t, err)
 	assert.Equal(t, 23983, len(data))
-}
-
-func TestFsStore_WrongFormat(t *testing.T) {
-	svc, teardown := prepareImageTest(t)
-	defer teardown()
-
-	_, err := svc.Save("file1.png", "user1", strings.NewReader("blah blah bad image"))
-	assert.Error(t, err)
 }
 
 func TestFsStore_SaveAndCommit(t *testing.T) {
 	svc, teardown := prepareImageTest(t)
 	defer teardown()
 
-	id, err := svc.Save("file1.png", "user1", gopherPNG())
+	id := "test_img"
+	err := svc.Save(id, gopherPNGBytes())
 	require.NoError(t, err)
-	err = svc.commit(id)
+	err = svc.Commit(id)
 	require.NoError(t, err)
 
 	imgStaging := svc.location(svc.Staging, id)
@@ -143,32 +99,20 @@ func TestFsStore_SaveAndCommit(t *testing.T) {
 	assert.Equal(t, 1462, len(data))
 }
 
-func TestFsStore_SaveTooLarge(t *testing.T) {
-	svc, teardown := prepareImageTest(t)
-	defer teardown()
-	svc.MaxSize = 2000
-	_, err := svc.Save("blah_ff1.png", "user2", io.MultiReader(gopherPNG(), gopherPNG()))
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "is too large")
-}
-
 func TestFsStore_LoadAfterSave(t *testing.T) {
 
 	svc, teardown := prepareImageTest(t)
 	defer teardown()
 
-	id, err := svc.Save("blah_ff1.png", "user1", gopherPNG())
+	id := "test_img"
+	err := svc.Save(id, gopherPNGBytes())
 	assert.NoError(t, err)
-	t.Log(id)
 
-	r, sz, err := svc.Load(id)
-	assert.NoError(t, err)
-	defer func() { assert.NoError(t, r.Close()) }()
-	data, err := ioutil.ReadAll(r)
+	data, err := svc.Load(id)
 	assert.NoError(t, err)
 	assert.Equal(t, 1462, len(data))
-	assert.Equal(t, int64(1462), sz)
-	_, _, err = svc.Load("abcd")
+	assert.Equal(t, gopherPNGBytes(), data)
+	_, err = svc.Load("abcd")
 	assert.Error(t, err)
 }
 
@@ -177,20 +121,16 @@ func TestFsStore_LoadAfterCommit(t *testing.T) {
 	svc, teardown := prepareImageTest(t)
 	defer teardown()
 
-	id, err := svc.Save("blah_ff1.png", "user1", gopherPNG())
+	id := "test_img"
+	err := svc.Save(id, gopherPNGBytes())
 	assert.NoError(t, err)
-	t.Log(id)
-	err = svc.commit(id)
+	err = svc.Commit(id)
 	require.NoError(t, err)
 
-	r, sz, err := svc.Load(id)
-	assert.NoError(t, err)
-	defer func() { assert.NoError(t, r.Close()) }()
-	data, err := ioutil.ReadAll(r)
+	data, err := svc.Load(id)
 	assert.NoError(t, err)
 	assert.Equal(t, 1462, len(data))
-	assert.Equal(t, int64(1462), sz)
-	_, _, err = svc.Load("abcd")
+	_, err = svc.Load("abcd")
 	assert.Error(t, err)
 }
 
@@ -211,6 +151,7 @@ func TestFsStore_location(t *testing.T) {
 		{0, "user/12345", "/tmp/user/12345"},
 	}
 	for n, tt := range tbl {
+		tt := tt
 		t.Run(strconv.Itoa(n), func(t *testing.T) {
 			svc := FileSystem{Location: "/tmp", Partitions: tt.partitions}
 			assert.Equal(t, tt.res, svc.location("/tmp", tt.id))
@@ -242,8 +183,9 @@ func TestFsStore_Cleanup(t *testing.T) {
 	svc, teardown := prepareImageTest(t)
 	defer teardown()
 
-	save := func(file string, user string) (path string) {
-		id, err := svc.Save(file, user, gopherPNG())
+	save := func(file string, user string) (filePath string) {
+		id := path.Join(user, file)
+		err := svc.Save(id, gopherPNGBytes())
 		require.NoError(t, err)
 		img := svc.location(svc.Staging, id)
 		data, err := ioutil.ReadFile(img)
@@ -260,13 +202,13 @@ func TestFsStore_Cleanup(t *testing.T) {
 	img3 := save("blah_ff3.png", "user2")
 
 	time.Sleep(200 * time.Millisecond) // make first image expired
-	err := svc.cleanup(context.Background(), time.Millisecond*300)
+	err := svc.Cleanup(context.Background(), time.Millisecond*300)
 	assert.NoError(t, err)
 
 	_, err = os.Stat(img1)
 	assert.Error(t, err, "no file on staging anymore")
 	// sometimes two images for user1 are put into same directory, which means that
-	// after first image cleanup it's not empty and won't be deleted
+	// after first image Cleanup it's not empty and won't be deleted
 	_, err = os.Stat(path.Dir(img1))
 	if path.Dir(img1) != path.Dir(img2) {
 		assert.Error(t, err, "no dir %s on staging anymore", path.Dir(img1))
@@ -280,13 +222,32 @@ func TestFsStore_Cleanup(t *testing.T) {
 	assert.NoError(t, err, "file on staging")
 
 	time.Sleep(200 * time.Millisecond) // make all images expired
-	err = svc.cleanup(context.Background(), time.Millisecond*300)
+	err = svc.Cleanup(context.Background(), time.Millisecond*300)
 	assert.NoError(t, err)
 
 	_, err = os.Stat(img2)
 	assert.Error(t, err, "no file on staging anymore")
 	_, err = os.Stat(img3)
 	assert.Error(t, err, "no file on staging anymore")
+}
+
+func TestFsStore_Info(t *testing.T) {
+	svc, teardown := prepareImageTest(t)
+	defer teardown()
+
+	// get ts on empty storage, should be zero
+	ts, err := svc.Info()
+	assert.NoError(t, err)
+	assert.True(t, ts.FirstStagingImageTS.IsZero())
+
+	// save image
+	err = svc.Save("test_img", gopherPNGBytes())
+	assert.NoError(t, err)
+
+	// get ts after saving, should be non-zero
+	ts, err = svc.Info()
+	assert.NoError(t, err)
+	assert.False(t, ts.FirstStagingImageTS.IsZero())
 }
 
 func prepareImageTest(t *testing.T) (svc *FileSystem, teardown func()) {
@@ -300,7 +261,6 @@ func prepareImageTest(t *testing.T) (svc *FileSystem, teardown func()) {
 		Location:   loc,
 		Staging:    staging,
 		Partitions: 100,
-		MaxSize:    1500,
 	}
 
 	teardown = func() {

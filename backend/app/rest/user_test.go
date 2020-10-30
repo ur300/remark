@@ -5,7 +5,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/umputun/remark/backend/app/store"
+
+	"github.com/umputun/remark42/backend/app/store"
 )
 
 func TestUser_GetUserInfo(t *testing.T) {
@@ -20,7 +21,7 @@ func TestUser_GetUserInfo(t *testing.T) {
 	assert.Equal(t, store.User{Name: "test", ID: "id", SiteID: "test"}, u)
 }
 
-func TestUSer_MustGetUserInfo(t *testing.T) {
+func TestUser_MustGetUserInfo(t *testing.T) {
 	defer func() {
 		if r := recover(); r != nil {
 			t.Log("recovered from panic")

@@ -1,5 +1,6 @@
 import { Theme } from './types';
 import { THEMES, MAX_SHOWN_ROOT_COMMENTS } from './constants';
+import parseQuery from '@app/utils/parseQuery';
 
 export interface QuerySettingsType {
   site_id?: string;
@@ -9,17 +10,10 @@ export interface QuerySettingsType {
   theme: Theme;
   /* used in delete users data page */
   token?: string;
+  show_email_subscription?: boolean;
 }
 
-export const querySettings: Partial<QuerySettingsType> =
-  window.location.search
-    .substr(1)
-    .split('&')
-    .reduce<{ [key: string]: string }>((acc, param) => {
-      const pair = param.split('=');
-      acc[pair[0]] = decodeURIComponent(pair[1]);
-      return acc;
-    }, {}) || {};
+export const querySettings: Partial<QuerySettingsType> = parseQuery();
 
 if (querySettings.max_shown_comments) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -31,6 +25,9 @@ if (querySettings.max_shown_comments) {
 if (!querySettings.theme || THEMES.indexOf(querySettings.theme) === -1) {
   querySettings.theme = THEMES[0];
 }
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+querySettings.show_email_subscription = (querySettings.show_email_subscription as any) !== 'false';
 
 export const siteId = querySettings.site_id;
 export const pageTitle = querySettings.page_title;

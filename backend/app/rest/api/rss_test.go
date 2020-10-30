@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/umputun/remark/backend/app/store"
+	"github.com/umputun/remark42/backend/app/store"
 )
 
 func TestServer_RssPost(t *testing.T) {
@@ -279,7 +279,7 @@ func waitOnSecChange() {
 }
 
 // clean formatting, i.e. multiple spaces, \t, \n
-func cleanRssFormatting(expected, actual string) (string, string) {
+func cleanRssFormatting(expected, actual string) (cleanExp, cleanAct string) {
 	reSpaces := regexp.MustCompile(`[\s\p{Zs}]{2,}`)
 
 	expected = strings.Replace(expected, "\n", " ", -1)

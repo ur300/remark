@@ -26,6 +26,7 @@ type Comment struct {
 	Edit        *Edit                  `json:"edit,omitempty" bson:"edit,omitempty"` // pointer to have empty default in json response
 	Pin         bool                   `json:"pin,omitempty" bson:"pin,omitempty"`
 	Deleted     bool                   `json:"delete,omitempty" bson:"delete"`
+	Imported    bool                   `json:"imported,omitempty" bson:"imported"`
 	PostTitle   string                 `json:"title,omitempty" bson:"title"`
 }
 
@@ -120,7 +121,7 @@ func (c *Comment) Sanitize() {
 	c.Text = p.Sanitize(c.Text)
 	c.Orig = p.Sanitize(c.Orig)
 	c.User.ID = template.HTMLEscapeString(c.User.ID)
-	c.User.Name = c.escapeHtmlWithSome(c.User.Name)
+	c.User.Name = c.escapeHTMLWithSome(c.User.Name)
 	c.User.Picture = p.Sanitize(c.User.Picture)
 }
 
@@ -145,7 +146,7 @@ func (c *Comment) Snippet(limit int) string {
 	return string(snippet) + " ..."
 }
 
-func (c *Comment) escapeHtmlWithSome(inp string) string {
+func (c *Comment) escapeHTMLWithSome(inp string) string {
 	res := template.HTMLEscapeString(inp)
 	res = strings.Replace(res, "&#34;", "\"", -1)
 	res = strings.Replace(res, "&#39;", "'", -1)

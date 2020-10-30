@@ -14,23 +14,27 @@ import (
 
 	log "github.com/go-pkgz/lgr"
 	"github.com/go-pkgz/repeater"
+	"github.com/hashicorp/go-multierror"
 	"github.com/pkg/errors"
+
+	"github.com/umputun/remark42/backend/app/templates"
 )
 
 // EmailParams contain settings for email notifications
 type EmailParams struct {
-	From                 string // from email address
-	MsgTemplate          string // request message template
-	VerificationSubject  string // verification message subject
-	VerificationTemplate string // verification message template
-	SubscribeURL         string // full subscribe handler URL
-	UnsubscribeURL       string // full unsubscribe handler URL
+	From                     string   // from email address
+	AdminEmails              []string // administrator emails to send copy of comment notification to
+	MsgTemplatePath          string   // path to request message template
+	VerificationSubject      string   // verification message sub
+	VerificationTemplatePath string   // path to verification template
+	SubscribeURL             string   // full subscribe handler URL
+	UnsubscribeURL           string   // full unsubscribe handler URL
 
 	TokenGenFn func(userID, email, site string) (string, error) // Unsubscribe token generation function
 }
 
-// SmtpParams contain settings for smtp server connection
-type SmtpParams struct {
+// SMTPParams contain settings for smtp server connection
+type SMTPParams struct {
 	Host     string        // SMTP host
 	Port     int           // SMTP port
 	TLS      bool          // TLS auth
@@ -42,7 +46,7 @@ type SmtpParams struct {
 // Email implements notify.Destination for email
 type Email struct {
 	EmailParams
-	SmtpParams
+	SMTPParams
 
 	smtp       smtpClientCreator
 	msgTmpl    *template.Template // parsed request message template
@@ -64,7 +68,7 @@ type smtpClient interface {
 
 // smtpClientCreator interface defines function for creating new smtpClients
 type smtpClientCreator interface {
-	Create(SmtpParams) (smtpClient, error)
+	Create(SMTPParams) (smtpClient, error)
 }
 
 type emailMessage struct {
@@ -88,6 +92,7 @@ type msgTmplData struct {
 	PostTitle         string
 	Email             string
 	UnsubscribeLink   string
+	ForAdmin          bool
 }
 
 // verifyTmplData store data for verification message template execution
@@ -100,167 +105,123 @@ type verifyTmplData struct {
 }
 
 const (
-	defaultVerificationSubject = "Email verification"
-	defaultEmailTimeout        = 10 * time.Second
-	defaultEmailTemplate       = `<!DOCTYPE html>
-<html>
-<head>
-	<meta name="viewport" content="width=device-width" />
-	<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
-	<style type="text/css">
-		img {
-			max-width: 100%;
-			max-height: 250px;
-			margin: 5px 0;
-			display: block;
-			color: #000;
-		}
-		a {
-			text-decoration: none;
-			color: #0aa;
-		}
-		p {
-			margin: 0 0 12px;
-		}
-		blockquote {
-			margin: 10px 0;
-			padding: 12px 12px 1px 12px;
-			background: rgba(255,255,255,.5)
-		}
-	</style>
-</head>
-<!-- Some of blocks on this page have color: #000 because GMail can wrap block in his own tags which can change text color -->
-<body>
-	<div style="font-family: Helvetica, Arial, sans-serif; font-size: 18px; width: 100%; max-width: 640px; margin: auto;">
-		<h1 style="text-align: center; position: relative; color: #4fbbd6; margin-top: 10px; margin-bottom: 10px;">Remark42</h1>
-		<div style="font-size: 16px; text-align: center; margin-bottom: 10px; color:#000!important;">New reply from {{.UserName}} on your comment{{if .PostTitle}} to «{{.PostTitle}}»{{ end }}</div>
-		<div style="background-color: #eee; padding: 15px 20px 20px 20px; border-radius: 3px;">
-			<div style="margin-bottom: 12px; line-height: 24px; word-break: break-all;">
-				<img src="{{.ParentUserPicture}}" style="width: 24px; height: 24px; display: inline; vertical-align: middle; margin: 0 8px 0 0; border-radius: 3px; background-color: #ccc;"/>
-				<span style="font-size: 14px; font-weight: bold; color: #777">{{.ParentUserName}}</span>
-				<span style="color: #999; font-size: 14px; margin: 0 8px;">{{.ParentCommentDate.Format "02.01.2006 at 15:04"}}</span>
-				<a href="{{.ParentCommentLink}}" style="color: #0aa; font-size: 14px;"><b>Show</b></a>
-			</div>
-			<div style="font-size: 14px; color:#333!important; padding: 0 14px 0 2px; border-radius: 3px; line-height: 1.4;">
-				{{.ParentCommentText}}
-			</div>
-			<div style="padding-left: 20px; border-left: 1px dotted rgba(0,0,0,0.15); margin-top: 15px; padding-top: 5px;">
-				<div style="margin-bottom: 12px;" line-height: 24px;word-break: break-all;>
-					<img src="{{.UserPicture}}" style="width: 24px; height: 24px; display:inline; vertical-align:middle; margin: 0 8px 0 0; border-radius: 3px; background-color: #ccc;"/>
-					<span style="font-size: 14px; font-weight: bold; color: #777">{{.UserName}}</span>
-					<span style="color: #999; font-size: 14px; margin: 0 8px;">{{.CommentDate.Format "02.01.2006 at 15:04"}}</span>
-					<a href="{{.CommentLink}}" style="color: #0aa; font-size: 14px;"><b>Reply</b></a>
-				</div>
-				<div style="font-size: 16px; background-color: #fff; color:#000!important; padding: 14px 14px 2px 14px; border-radius: 3px; line-height: 1.4;">{{.CommentText}}</div>
-			</div>
-		</div>
-		<div style="text-align: center; font-size: 14px; margin-top: 32px;">
-			<i style="color: #000!important;">Sent to <a style="color:inherit; text-decoration: none" href="mailto:{{.Email}}">{{.Email}}</a> for {{.ParentUserName}}</i>
-			<div style="margin: auto; width: 150px; border-top: 1px solid rgba(0, 0, 0, 0.15); padding-top: 15px; margin-top: 15px;"></div>
-			<a style="color: #0aa;" href="{{.UnsubscribeLink}}">Unsubscribe</a>
-			<!-- This is hack for remove collapser in Gmail which can collapse end of the message -->
-			<div style="opacity: 0;font-size: 1;">[{{.CommentDate.Format "02.01.2006 at 15:04"}}]</div>
-		</div>
-	</div>
-</body>
-</html>
-`
-	defaultEmailVerificationTemplate = `<!DOCTYPE html>
-<html>
-<head>
-	<meta name="viewport" content="width=device-width" />
-	<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
-</head>
-<body>
-	<!-- Some of blocks on this page have color: #000 because GMail can wrap block in his own tags which can change text color -->
-	<div style="text-align: center; font-family: Helvetica, Arial, sans-serif; font-size: 18px;">
-		<h1 style="position: relative; color: #4fbbd6; margin-top: 0.2em;">Remark42</h1>
-		<p style="position: relative; max-width: 20em; margin: 0 auto 1em auto; line-height: 1.4em; color:#000!important;">Confirmation for <b>{{.User}}</b> on site <b>{{.Site}}</b></p>
-		{{if .SubscribeURL}}
-		<p style="position: relative; margin: 0 0 0.5em 0;color:#000!important;"><a href="{{.SubscribeURL}}{{.Token}}">Click here to subscribe to email notifications</a></p>
-		<p style="position: relative; margin: 0 0 0.5em 0;color:#000!important;">Alternatively, you can use code below for subscription.</p>
-		{{ end }}
-		<div style="background-color: #eee; max-width: 20em; margin: 0 auto; border-radius: 0.4em; padding: 0.5em;">
-			<p style="position: relative; margin: 0 0 0.5em 0;color:#000!important;">TOKEN</p>
-			<p style="position: relative; font-size: 0.7em; opacity: 0.8;"><i style="color:#000!important;">Copy and paste this text into “token” field on comments page</i></p>
-			<p style="position: relative; font-family: monospace; background-color: #fff; margin: 0; padding: 0.5em; word-break: break-all; text-align: left; border-radius: 0.2em; -webkit-user-select: all; user-select: all;">{{.Token}}</p>
-		</div>
-		<p style="position: relative; margin-top: 2em; font-size: 0.8em; opacity: 0.8;"><i style="color:#000!important;">Sent to {{.Email}}</i></p>
-	</div>
-</body>
-</html>
-`
+	defaultVerificationSubject           = "Email verification"
+	defaultEmailTimeout                  = 10 * time.Second
+	defaultEmailTemplatePath             = "email_reply.html.tmpl"
+	defaultEmailVerificationTemplatePath = "email_confirmation_subscription.html.tmpl"
 )
 
 // NewEmail makes new Email object, returns error in case of e.MsgTemplate or e.VerificationTemplate parsing error
-func NewEmail(emailParams EmailParams, smtpParams SmtpParams) (*Email, error) {
+func NewEmail(emailParams EmailParams, smtpParams SMTPParams) (*Email, error) {
 	// set up Email emailParams
 	res := Email{EmailParams: emailParams}
-	if res.MsgTemplate == "" {
-		res.MsgTemplate = defaultEmailTemplate
+	res.smtp = &emailClient{}
+	res.SMTPParams = smtpParams
+	if res.TimeOut <= 0 {
+		res.TimeOut = defaultEmailTimeout
 	}
-	if res.VerificationTemplate == "" {
-		res.VerificationTemplate = defaultEmailVerificationTemplate
-	}
+
 	if res.VerificationSubject == "" {
 		res.VerificationSubject = defaultVerificationSubject
 	}
 
-	// set up SMTP emailParams
-	res.smtp = &emailClient{}
-	res.SmtpParams = smtpParams
-	if res.TimeOut <= 0 {
-		res.TimeOut = defaultEmailTimeout
+	// initialize templates
+	err := res.setTemplates()
+	if err != nil {
+		return nil, errors.Wrap(err, "can't set templates")
 	}
 
 	log.Printf("[DEBUG] Create new email notifier for server %s with user %s, timeout=%s",
 		res.Host, res.Username, res.TimeOut)
 
-	// initialise templates
-	var err error
-	if res.msgTmpl, err = template.New("messageFromRequest").Parse(res.MsgTemplate); err != nil {
-		return nil, errors.Wrapf(err, "can't parse message template")
-	}
-	if res.verifyTmpl, err = template.New("messageFromRequest").Parse(res.VerificationTemplate); err != nil {
-		return nil, errors.Wrapf(err, "can't parse verification template")
-	}
-	return &res, err
+	return &res, nil
 }
 
-// Send email about reply to Request.Email if it's set, otherwise do nothing and return nil, thread safe
-// do not returns sending error, only following:
-// 1. (likely impossible) template execution error from email message creation from Request
-// 2. message dropped without sending in case of closed ctx
-func (e *Email) Send(ctx context.Context, req Request) (err error) {
+func (e *Email) setTemplates() error {
+	var err error
+	var msgTmplFile, verifyTmplFile []byte
+	fs := templates.NewFS()
+
+	if e.VerificationTemplatePath == "" {
+		e.VerificationTemplatePath = defaultEmailVerificationTemplatePath
+	}
+
+	if e.MsgTemplatePath == "" {
+		e.MsgTemplatePath = defaultEmailTemplatePath
+	}
+
+	if msgTmplFile, err = fs.ReadFile(e.MsgTemplatePath); err != nil {
+		return errors.Wrapf(err, "can't read message template")
+	}
+	if verifyTmplFile, err = fs.ReadFile(e.VerificationTemplatePath); err != nil {
+		return errors.Wrapf(err, "can't read verification template")
+	}
+	if e.msgTmpl, err = template.New("msgTmpl").Parse(string(msgTmplFile)); err != nil {
+		return errors.Wrapf(err, "can't parse message template")
+	}
+	if e.verifyTmpl, err = template.New("verifyTmpl").Parse(string(verifyTmplFile)); err != nil {
+		return errors.Wrapf(err, "can't parse verification template")
+	}
+
+	return nil
+}
+
+// Send email about comment reply to Request.Emails and Email.AdminEmails
+// if they're set.
+// Thread safe
+func (e *Email) Send(ctx context.Context, req Request) error {
+	select {
+	case <-ctx.Done():
+		return errors.Errorf("sending email messages about comment %q aborted due to canceled context", req.Comment.ID)
+	default:
+	}
+
+	result := new(multierror.Error)
+
+	for _, email := range req.Emails {
+		err := e.buildAndSendMessage(ctx, req, email, false)
+		result = multierror.Append(errors.Wrapf(err, "problem sending user email notification to %q", email))
+	}
+
+	for _, email := range e.AdminEmails {
+		err := e.buildAndSendMessage(ctx, req, email, true)
+		result = multierror.Append(errors.Wrapf(err, "problem sending admin email notification to %q", email))
+	}
+
+	return result.ErrorOrNil()
+}
+
+func (e *Email) buildAndSendMessage(ctx context.Context, req Request, email string, forAdmin bool) error {
+	log.Printf("[DEBUG] send notification via %s, comment id %s", e, req.Comment.ID)
+	msg, err := e.buildMessageFromRequest(req, email, forAdmin)
+	if err != nil {
+		return err
+	}
+
+	return repeater.NewDefault(5, time.Millisecond*250).Do(
+		ctx,
+		func() error {
+			return e.sendMessage(emailMessage{from: e.From, to: email, message: msg})
+		})
+}
+
+// SendVerification email verification VerificationRequest.Email if it's set.
+// Thread safe
+func (e *Email) SendVerification(ctx context.Context, req VerificationRequest) error {
 	if req.Email == "" {
 		// this means we can't send this request via Email
 		return nil
 	}
 	select {
 	case <-ctx.Done():
-		return errors.Errorf("sending message to %q aborted due to canceled context", req.Email)
+		return errors.Errorf("sending message to %q aborted due to canceled context", req.User)
 	default:
 	}
-	var msg string
 
-	if req.Verification.Token != "" {
-		log.Printf("[DEBUG] send verification via %s, user %s", e, req.Verification.User)
-		msg, err = e.buildVerificationMessage(req.Verification.User, req.Email, req.Verification.Token, req.Verification.SiteID)
-		if err != nil {
-			return err
-		}
-	}
-
-	if req.Comment.ID != "" {
-		if req.parent.User.ID == req.Comment.User.ID {
-			// don't send anything if if user replied to their own comment
-			return nil
-		}
-		log.Printf("[DEBUG] send notification via %s, comment id %s", e, req.Comment.ID)
-		msg, err = e.buildMessageFromRequest(req)
-		if err != nil {
-			return err
-		}
+	log.Printf("[DEBUG] send verification via %s, user %s", e, req.User)
+	msg, err := e.buildVerificationMessage(req.User, req.Email, req.Token, req.SiteID)
+	if err != nil {
+		return err
 	}
 
 	return repeater.NewDefault(5, time.Millisecond*250).Do(
@@ -288,37 +249,50 @@ func (e *Email) buildVerificationMessage(user, email, token, site string) (strin
 }
 
 // buildMessageFromRequest generates email message based on Request using e.MsgTemplate
-func (e *Email) buildMessageFromRequest(req Request) (string, error) {
+func (e *Email) buildMessageFromRequest(req Request, email string, forAdmin bool) (string, error) {
 	subject := "New reply to your comment"
-	if req.Comment.PostTitle != "" {
-		subject += fmt.Sprintf(" for \"%s\"", req.Comment.PostTitle)
+	if forAdmin {
+		subject = "New comment to your site"
 	}
-	token, err := e.TokenGenFn(req.parent.User.ID, req.Email, req.Comment.Locator.SiteID)
-	unsubscribeLink := e.UnsubscribeURL + "?site=" + req.Comment.Locator.SiteID + "&tkn=" + token
+	if req.Comment.PostTitle != "" {
+		subject += fmt.Sprintf(" for %q", req.Comment.PostTitle)
+	}
+
+	token, err := e.TokenGenFn(req.parent.User.ID, email, req.Comment.Locator.SiteID)
 	if err != nil {
 		return "", errors.Wrapf(err, "error creating token for unsubscribe link")
 	}
-	commentUrlPrefix := req.Comment.Locator.URL + uiNav
+	unsubscribeLink := e.UnsubscribeURL + "?site=" + req.Comment.Locator.SiteID + "&tkn=" + token
+	if forAdmin {
+		unsubscribeLink = ""
+	}
+
+	commentURLPrefix := req.Comment.Locator.URL + uiNav
 	msg := bytes.Buffer{}
-	err = e.msgTmpl.Execute(&msg, msgTmplData{
-		UserName:          req.Comment.User.Name,
-		UserPicture:       req.Comment.User.Picture,
-		CommentText:       req.Comment.Text,
-		CommentLink:       commentUrlPrefix + req.Comment.ID,
-		CommentDate:       req.Comment.Timestamp,
-		ParentUserName:    req.parent.User.Name,
-		ParentUserPicture: req.parent.User.Picture,
-		ParentCommentText: req.parent.Text,
-		ParentCommentLink: commentUrlPrefix + req.parent.ID,
-		ParentCommentDate: req.parent.Timestamp,
-		PostTitle:         req.Comment.PostTitle,
-		Email:             req.Email,
-		UnsubscribeLink:   unsubscribeLink,
-	})
+	tmplData := msgTmplData{
+		UserName:        req.Comment.User.Name,
+		UserPicture:     req.Comment.User.Picture,
+		CommentText:     req.Comment.Text,
+		CommentLink:     commentURLPrefix + req.Comment.ID,
+		CommentDate:     req.Comment.Timestamp,
+		PostTitle:       req.Comment.PostTitle,
+		Email:           email,
+		UnsubscribeLink: unsubscribeLink,
+		ForAdmin:        forAdmin,
+	}
+	// in case of message to admin, parent message might be empty
+	if req.Comment.ParentID != "" {
+		tmplData.ParentUserName = req.parent.User.Name
+		tmplData.ParentUserPicture = req.parent.User.Picture
+		tmplData.ParentCommentText = req.parent.Text
+		tmplData.ParentCommentLink = commentURLPrefix + req.parent.ID
+		tmplData.ParentCommentDate = req.parent.Timestamp
+	}
+	err = e.msgTmpl.Execute(&msg, tmplData)
 	if err != nil {
 		return "", errors.Wrapf(err, "error executing template to build comment reply message")
 	}
-	return e.buildMessage(subject, msg.String(), req.Email, "text/html", unsubscribeLink)
+	return e.buildMessage(subject, msg.String(), email, "text/html", unsubscribeLink)
 }
 
 // buildMessage generates email message to send using net/smtp.Data()
@@ -350,7 +324,10 @@ func (e *Email) buildMessage(subject, body, to, contentType, unsubscribeLink str
 	if _, err := qp.Write([]byte(body)); err != nil {
 		return "", err
 	}
-	defer qp.Close()
+	// flush now, must NOT use defer, for small body, defer may cause buff.String() got empty body
+	if err := qp.Close(); err != nil {
+		return "", fmt.Errorf("quotedprintable Write failed: %w", err)
+	}
 	m := buff.String()
 	message += "\n" + m
 	return message, nil
@@ -360,30 +337,30 @@ func (e *Email) buildMessage(subject, body, to, contentType, unsubscribeLink str
 // Thread safe.
 func (e *Email) sendMessage(m emailMessage) error {
 	if e.smtp == nil {
-		return errors.New("sendMessage called without smtpClient set")
+		return errors.New("sendMessage called without client set")
 	}
-	smtpClient, err := e.smtp.Create(e.SmtpParams)
+	client, err := e.smtp.Create(e.SMTPParams)
 	if err != nil {
 		return errors.Wrap(err, "failed to make smtp Create")
 	}
 
 	defer func() {
-		if err := smtpClient.Quit(); err != nil {
+		if err = client.Quit(); err != nil {
 			log.Printf("[WARN] failed to send quit command to %s:%d, %v", e.Host, e.Port, err)
-			if err := smtpClient.Close(); err != nil {
+			if err = client.Close(); err != nil {
 				log.Printf("[WARN] can't close smtp connection, %v", err)
 			}
 		}
 	}()
 
-	if err := smtpClient.Mail(m.from); err != nil {
+	if err = client.Mail(m.from); err != nil {
 		return errors.Wrapf(err, "bad from address %q", m.from)
 	}
-	if err := smtpClient.Rcpt(m.to); err != nil {
+	if err = client.Rcpt(m.to); err != nil {
 		return errors.Wrapf(err, "bad to address %q", m.to)
 	}
 
-	writer, err := smtpClient.Data()
+	writer, err := client.Data()
 	if err != nil {
 		return errors.Wrap(err, "can't make email writer")
 	}
@@ -407,9 +384,9 @@ func (e *Email) String() string {
 	return fmt.Sprintf("email: from %q with username '%s' at server %s:%d", e.From, e.Username, e.Host, e.Port)
 }
 
-// Create establish SMTP connection with server using credentials in smtpClientWithCreator.SmtpParams
+// Create establish SMTP connection with server using credentials in smtpClientWithCreator.SMTPParams
 // and returns pointer to it. Thread safe.
-func (s *emailClient) Create(params SmtpParams) (smtpClient, error) {
+func (s *emailClient) Create(params SMTPParams) (smtpClient, error) {
 	authenticate := func(c *smtp.Client) error {
 		if params.Username == "" || params.Password == "" {
 			return nil
@@ -427,6 +404,7 @@ func (s *emailClient) Create(params SmtpParams) (smtpClient, error) {
 		tlsConf := &tls.Config{
 			InsecureSkipVerify: false,
 			ServerName:         params.Host,
+			MinVersion:         tls.VersionTLS12,
 		}
 		conn, err := tls.Dial("tcp", srvAddress, tlsConf)
 		if err != nil {
@@ -443,7 +421,7 @@ func (s *emailClient) Create(params SmtpParams) (smtpClient, error) {
 		return nil, errors.Wrapf(err, "timeout connecting to %s", srvAddress)
 	}
 
-	c, err = smtp.NewClient(conn, srvAddress)
+	c, err = smtp.NewClient(conn, params.Host)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to dial")
 	}

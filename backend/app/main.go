@@ -8,9 +8,9 @@ import (
 	"syscall"
 
 	log "github.com/go-pkgz/lgr"
-	"github.com/jessevdk/go-flags"
+	"github.com/umputun/go-flags"
 
-	"github.com/umputun/remark/backend/app/cmd"
+	"github.com/umputun/remark42/backend/app/cmd"
 )
 
 // Opts with all cli commands and flags
@@ -84,6 +84,7 @@ func getDump() string {
 	return string(stacktrace[:length])
 }
 
+// nolint:gochecknoinits // can't avoid it in this place
 func init() {
 	// catch SIGQUIT and print stack traces
 	sigChan := make(chan os.Signal)

@@ -3,9 +3,9 @@ package cmd
 import (
 	"path"
 
-	bolt "github.com/coreos/bbolt"
 	log "github.com/go-pkgz/lgr"
 	"github.com/pkg/errors"
+	bolt "go.etcd.io/bbolt"
 
 	"github.com/go-pkgz/auth/avatar"
 )
@@ -34,7 +34,7 @@ func (a avatarMigrator) Migrate(dst, src avatar.Store) (int, error) {
 }
 
 // Execute runs  with AvatarCommand parameters, entry point for "avatar" command
-func (ac *AvatarCommand) Execute(args []string) error {
+func (ac *AvatarCommand) Execute(_ []string) error {
 	log.Printf("[INFO] migrate avatars from %s to %s", ac.AvatarSrc.Type, ac.AvatarDst.Type)
 
 	src, err := ac.makeAvatarStore(ac.AvatarSrc)
@@ -72,12 +72,12 @@ func (ac *AvatarCommand) makeAvatarStore(gr AvatarGroup) (avatar.Store, error) {
 	switch gr.Type {
 	case "fs":
 		if err := makeDirs(gr.FS.Path); err != nil {
-			return nil, err
+			return nil, errors.Wrap(err, "failed to create avatar store")
 		}
 		return avatar.NewLocalFS(gr.FS.Path), nil
 	case "bolt":
 		if err := makeDirs(path.Dir(gr.Bolt.File)); err != nil {
-			return nil, err
+			return nil, errors.Wrap(err, "failed to create avatar store")
 		}
 		return avatar.NewBoltDB(gr.Bolt.File, bolt.Options{})
 	}

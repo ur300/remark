@@ -37,7 +37,7 @@ type StaticStore struct {
 }
 
 // NewStaticStore makes StaticStore instance with given key
-func NewStaticStore(key string, sites []string, admins []string, email string) *StaticStore {
+func NewStaticStore(key string, sites, admins []string, email string) *StaticStore {
 	log.Printf("[DEBUG] admin users %+v, email %s", admins, email)
 	return &StaticStore{key: key, sites: sites, admins: admins, email: email}
 }
@@ -79,4 +79,4 @@ func (s *StaticStore) Enabled(site string) (ok bool, err error) {
 }
 
 // OnEvent doesn nothing for StaticStore
-func (s *StaticStore) OnEvent(siteID string, et EventType) error { return nil }
+func (s *StaticStore) OnEvent(_ string, _ EventType) error { return nil }

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"crypto/sha1" // nolint
 	"encoding/base64"
 	"io"
@@ -18,10 +19,10 @@ import (
 	R "github.com/go-pkgz/rest"
 	"github.com/pkg/errors"
 
-	"github.com/umputun/remark/backend/app/rest"
-	"github.com/umputun/remark/backend/app/store"
-	"github.com/umputun/remark/backend/app/store/image"
-	"github.com/umputun/remark/backend/app/store/service"
+	"github.com/umputun/remark42/backend/app/rest"
+	"github.com/umputun/remark42/backend/app/store"
+	"github.com/umputun/remark42/backend/app/store/image"
+	"github.com/umputun/remark42/backend/app/store/service"
 )
 
 type public struct {
@@ -163,14 +164,14 @@ func (s *public) infoStreamCtrl(w http.ResponseWriter, r *http.Request) {
 	locator := store.Locator{SiteID: r.URL.Query().Get("site"), URL: r.URL.Query().Get("url")}
 	log.Printf("[DEBUG] start stream for %+v, timeout=%v, refresh=%v", locator, s.streamer.TimeOut, s.streamer.Refresh)
 
-	sinceTs, err := s.parseSince(r)
+	sinceTS, err := s.parseSince(r)
 	if err != nil {
 		rest.SendErrorJSON(w, r, http.StatusBadRequest, err, "can't translate since parameter", rest.ErrDecode)
 		return
 	}
 
 	fn := func() steamEventFn {
-		lastTS := sinceTs
+		lastTS := sinceTS
 		lastCount := 0
 
 		return func() (event string, data []byte, upd bool, err error) {
@@ -192,7 +193,6 @@ func (s *public) infoStreamCtrl(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return "info", data, false, err
 			}
-
 			return "info", data, upd, nil
 		}
 	}
@@ -245,17 +245,17 @@ func (s *public) lastCommentsStreamCtrl(w http.ResponseWriter, r *http.Request) 
 	siteID := r.URL.Query().Get("site")
 	log.Printf("[DEBUG] get last comments stream for %s", siteID)
 
-	sinceTs, err := s.parseSince(r)
+	sinceTS, err := s.parseSince(r)
 	if err != nil {
 		rest.SendErrorJSON(w, r, http.StatusBadRequest, err, "can't translate since parameter", rest.ErrDecode)
 		return
 	}
-	if sinceTs.IsZero() {
-		sinceTs = time.Now()
+	if sinceTS.IsZero() {
+		sinceTS = time.Now()
 	}
 
 	fn := func() steamEventFn {
-		sinceTime := sinceTs
+		sinceTime := sinceTS
 		return func() (event string, data []byte, upd bool, err error) {
 			key := cache.NewKey(siteID).ID(URLKey(r)).Scopes(lastCommentsScope)
 			data, err = s.cache.Get(key, func() ([]byte, error) {
@@ -263,11 +263,11 @@ func (s *public) lastCommentsStreamCtrl(w http.ResponseWriter, r *http.Request) 
 				if e != nil {
 					return nil, e
 				}
+				sinceTime = time.Now()
 				if len(comments) > 0 {
 					sinceTime = comments[0].Timestamp
 					upd = true
 				}
-				sinceTime = time.Now()
 				return encodeJSONWithHTML(comments)
 			})
 			return "last", data, upd, err
@@ -356,9 +356,10 @@ func (s *public) countCtrl(w http.ResponseWriter, r *http.Request) {
 
 // POST /counts?site=siteID - get number of comments for posts from post body
 func (s *public) countMultiCtrl(w http.ResponseWriter, r *http.Request) {
+	const countBodyLimit int64 = 1024 * 128 // count request can be big for some site because it lists all urls
 	siteID := r.URL.Query().Get("site")
 	posts := []string{}
-	if err := render.DecodeJSON(http.MaxBytesReader(w, r.Body, hardBodyLimit), &posts); err != nil {
+	if err := render.DecodeJSON(http.MaxBytesReader(w, r.Body, countBodyLimit), &posts); err != nil {
 		rest.SendErrorJSON(w, r, http.StatusBadRequest, err, "can't get list of posts from request", rest.ErrSiteNotFound)
 		return
 	}
@@ -421,22 +422,8 @@ func (s *public) listCtrl(w http.ResponseWriter, r *http.Request) {
 
 // GET /picture/{user}/{id} - get picture
 func (s *public) loadPictureCtrl(w http.ResponseWriter, r *http.Request) {
-
-	imgContentType := func(img string) string {
-		img = strings.ToLower(img)
-		switch {
-		case strings.HasSuffix(img, ".png"):
-			return "image/png"
-		case strings.HasSuffix(img, ".jpg") || strings.HasSuffix(img, ".jpeg"):
-			return "image/jpeg"
-		case strings.HasSuffix(img, ".gif"):
-			return "image/gif"
-		}
-		return "image/*"
-	}
-
 	id := chi.URLParam(r, "user") + "/" + chi.URLParam(r, "id")
-	imgRdr, size, err := s.imageService.Load(id)
+	img, err := s.imageService.Load(id)
 	if err != nil {
 		rest.SendErrorJSON(w, r, http.StatusBadRequest, err, "can't get image "+id, rest.ErrAssetNotFound)
 		return
@@ -452,16 +439,10 @@ func (s *public) loadPictureCtrl(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	defer func() {
-		if e := imgRdr.Close(); e != nil {
-			log.Printf("[WARN] failed to close reader for picture %s, %v", id, e)
-		}
-	}()
-
-	w.Header().Set("Content-Type", imgContentType(id))
-	w.Header().Set("Content-Length", strconv.Itoa(int(size)))
+	w.Header().Set("Content-Type", s.imageService.ImgContentType(img))
+	w.Header().Set("Content-Length", strconv.Itoa(len(img)))
 	w.WriteHeader(http.StatusOK)
-	if _, err = io.Copy(w, imgRdr); err != nil {
+	if _, err = io.Copy(w, bytes.NewReader(img)); err != nil {
 		log.Printf("[WARN] can't send response to %s, %s", r.RemoteAddr, err)
 	}
 }
@@ -502,13 +483,13 @@ func (s *public) applyView(comments []store.Comment, view string) []store.Commen
 }
 
 func (s *public) parseSince(r *http.Request) (time.Time, error) {
-	sinceTs := time.Time{}
+	sinceTS := time.Time{}
 	if since := r.URL.Query().Get("since"); since != "" {
 		unixTS, e := strconv.ParseInt(since, 10, 64)
 		if e != nil {
 			return time.Time{}, errors.Wrap(e, "can't translate since parameter")
 		}
-		sinceTs = time.Unix(unixTS/1000, 1000000*(unixTS%1000)) // since param in msec timestamp
+		sinceTS = time.Unix(unixTS/1000, 1000000*(unixTS%1000)) // since param in msec timestamp
 	}
-	return sinceTs, nil
+	return sinceTS, nil
 }

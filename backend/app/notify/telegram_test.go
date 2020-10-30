@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/umputun/remark/backend/app/store"
+	"github.com/umputun/remark42/backend/app/store"
 )
 
 func TestTelegram_New(t *testing.T) {
@@ -37,7 +37,9 @@ func TestTelegram_New(t *testing.T) {
 	assert.EqualError(t, err, "unexpected telegram status code 404")
 
 	_, err = NewTelegram("no-such-thing", "remark_test", 2*time.Second, "http://127.0.0.1:4321/")
-	assert.EqualError(t, err, "can't initialize telegram notifications: Get http://127.0.0.1:4321/no-such-thing/getMe: dial tcp 127.0.0.1:4321: connect: connection refused")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "can't initialize telegram notifications")
+	assert.Contains(t, err.Error(), "dial tcp 127.0.0.1:4321: connect: connection refused")
 
 	_, err = NewTelegram("good-token", "remark_test", 2*time.Second, "")
 	assert.Error(t, err, "empty api url not allowed")
@@ -76,7 +78,18 @@ func TestTelegram_Send(t *testing.T) {
 	assert.Contains(t, err.Error(), "unexpected telegram status code 404", "send on broken tg")
 
 	assert.Equal(t, "telegram: @remark_test", tb.String())
-	require.NoError(t, tb.Send(context.TODO(), Request{}), "Empty Comment doesn't send anything")
+}
+
+func TestTelegram_SendVerification(t *testing.T) {
+	ts := mockTelegramServer()
+	defer ts.Close()
+
+	tb, err := NewTelegram("good-token", "remark_test", 2*time.Second, ts.URL+"/")
+	assert.NoError(t, err)
+	assert.NotNil(t, tb)
+
+	err = tb.SendVerification(context.TODO(), VerificationRequest{})
+	assert.NoError(t, err)
 }
 
 func mockTelegramServer() *httptest.Server {
